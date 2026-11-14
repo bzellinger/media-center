@@ -1,0 +1,11 @@
+# Private Edge profile: sign-in, radio key, and settings live here on each PC
+browser-data/
+
+# This PC's app locations (YouTube, voice assistant)
+tools/apps.json
+
+# A local copy of the TV listings. The app rebuilds it after you sign in.
+tools/guide_cache.json
+
+__pycache__/
+*.py[cod]

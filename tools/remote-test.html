@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remote Test</title>
+<style>
+  :root {
+    --bg: #000;
+    --fg: #fff;
+    --dim: #6b6b6b;
+    --faint: #2a2a2a;
+    --accent: #ec008c;
+    --ok: #7ad151;
+    --font: "Segoe UI Light", "Segoe UI", "Selawik", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--fg);
+    font-family: var(--font); font-weight: 300;
+    overflow: hidden; cursor: default; user-select: none;
+  }
+  /* TV-safe margins */
+  .stage { position: absolute; inset: 5vh 5vw; display: flex; flex-direction: column; }
+
+  .header {
+    font-size: 16vh; line-height: 1; letter-spacing: -0.02em;
+    white-space: nowrap; margin-left: -0.6vw;
+    animation: headerIn 900ms cubic-bezier(.1,.9,.2,1) both;
+  }
+  .sub { font-size: 3.2vh; color: var(--dim); margin-top: 1vh; }
+
+  .prompt { margin-top: 7vh; }
+  .prompt .label { font-size: 3vh; color: var(--dim); }
+  .prompt .word {
+    font-size: 11vh; line-height: 1.1; white-space: nowrap;
+  }
+  .prompt .hint { font-size: 3vh; color: var(--dim); margin-top: 1vh; }
+  .anim-in > * { animation: flyIn 550ms cubic-bezier(.1,.9,.2,1) both; }
+  .anim-in > *:nth-child(2) { animation-delay: 60ms; }
+  .anim-in > *:nth-child(3) { animation-delay: 120ms; }
+  .anim-in > *:nth-child(4) { animation-delay: 180ms; }
+
+  .timer { height: 3px; background: var(--faint); margin-top: 4vh; width: 40vw; overflow: hidden; }
+  .timer > div { height: 100%; background: var(--fg); width: 100%; transform-origin: left; }
+
+  .got { font-size: 4vh; color: var(--ok); margin-top: 3vh; min-height: 5vh; }
+
+  .results { display: none; margin-top: 4vh; font-size: 2.8vh; column-count: 2; column-gap: 5vw; }
+  .results .row { break-inside: avoid; padding: .6vh 0; animation: flyIn 450ms cubic-bezier(.1,.9,.2,1) both; }
+  .results .name { color: var(--fg); }
+  .results .val { color: var(--dim); }
+  .results .none { color: var(--accent); }
+
+  .copy {
+    display: none; margin-top: 3vh; align-self: flex-start;
+    font: inherit; font-size: 3vh; color: var(--bg); background: var(--fg);
+    border: 0; padding: 1vh 2vw; cursor: pointer;
+  }
+
+  .log {
+    position: absolute; right: 0; bottom: 0; width: 34vw;
+    font-family: Consolas, monospace; font-size: 1.6vh; color: var(--dim);
+    text-align: right; line-height: 1.5;
+  }
+  .log div:first-child { color: var(--fg); }
+
+  @keyframes flyIn {
+    from { opacity: 0; transform: translateX(8vw); }
+    to   { opacity: 1; transform: none; }
+  }
+  @keyframes headerIn {
+    from { opacity: 0; transform: translateX(20vw); }
+    to   { opacity: 1; transform: none; }
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="header">remote test</div>
+  <div class="sub" id="sub">click anywhere or press any button to begin</div>
+
+  <div class="prompt" id="prompt"></div>
+  <div class="timer" id="timerWrap" style="visibility:hidden"><div id="timer"></div></div>
+  <div class="got" id="got"></div>
+
+  <div class="results" id="results"></div>
+  <button class="copy" id="copy">copy results</button>
+
+  <div class="log" id="log"></div>
+</div>
+
+<script>
+// Each Shield remote button we want to identify. Power and mic are left out on purpose.
+const STEPS = [
+  { name: "up",           hint: "press up on the round d-pad" },
+  { name: "down",         hint: "press down on the d-pad" },
+  { name: "left",         hint: "press left on the d-pad" },
+  { name: "right",        hint: "press right on the d-pad" },
+  { name: "select",       hint: "press the center of the d-pad" },
+  { name: "back",         hint: "press the back arrow button" },
+  { name: "home",         hint: "press the home (circle) button" },
+  { name: "play / pause", hint: "press play / pause" },
+  { name: "rewind",       hint: "press rewind" },
+  { name: "fast forward", hint: "press fast forward" },
+  { name: "menu",         hint: "press the ≡ menu / settings button (skip if you don't have one)" },
+  { name: "netflix",      hint: "press the netflix button (skip if you don't have one)" },
+  { name: "volume up",    hint: "press volume up" },
+  { name: "volume down",  hint: "press volume down" },
+];
+const WAIT_MS = 10000;   // give up on a button after this long
+const GATHER_MS = 700;   // after the first signal, keep listening briefly to catch extras
+
+const $ = id => document.getElementById(id);
+let started = false, finished = false;
+let stepIndex = -1, results = [], current = null, waitTimer = null, gatherTimer = null;
+
+function logLine(text) {
+  const d = document.createElement("div");
+  d.textContent = text;
+  $("log").prepend(d);
+  while ($("log").children.length > 12) $("log").lastChild.remove();
+}
+
+function describe(ev) {
+  if (ev.kind === "key") return `key "${ev.key}" (code ${ev.code || "—"}, ${ev.keyCode})`;
+  if (ev.kind === "mouse") return `mouse button ${ev.button}`;
+  if (ev.kind === "wheel") return `scroll wheel ${ev.dir}`;
+  if (ev.kind === "pad") return `gamepad button ${ev.button}`;
+  if (ev.kind === "nav") return `browser back/forward navigation`;
+  return JSON.stringify(ev);
+}
+
+function nextStep() {
+  clearTimeout(waitTimer); clearTimeout(gatherTimer);
+  stepIndex++;
+  if (stepIndex >= STEPS.length) return finish();
+  const s = STEPS[stepIndex];
+  current = { name: s.name, events: [] };
+  $("sub").textContent = `button ${stepIndex + 1} of ${STEPS.length}`;
+  $("got").textContent = "";
+  const p = $("prompt");
+  p.classList.remove("anim-in"); void p.offsetWidth; p.classList.add("anim-in");
+  p.innerHTML = `<div class="label">press</div><div class="word">${s.name}</div><div class="hint">${s.hint}</div>`;
+  // countdown bar
+  $("timerWrap").style.visibility = "visible";
+  const bar = $("timer");
+  bar.style.transition = "none"; bar.style.transform = "scaleX(1)"; void bar.offsetWidth;
+  bar.style.transition = `transform ${WAIT_MS}ms linear`; bar.style.transform = "scaleX(0)";
+  waitTimer = setTimeout(() => { results.push(current); $("got").textContent = "nothing received — skipping"; setTimeout(nextStep, 900); }, WAIT_MS);
+}
+
+function record(ev) {
+  logLine(describe(ev));
+  if (!started) { if (ev.kind !== "nav") start(); return; }
+  if (finished || !current) return;
+  current.events.push(ev);
+  if (current.events.length === 1) {
+    clearTimeout(waitTimer);
+    $("timer").style.transition = "none";
+    $("got").textContent = "got it: " + describe(ev);
+    gatherTimer = setTimeout(() => { results.push(current); current = null; nextStep(); }, GATHER_MS);
+  }
+}
+
+function start() {
+  if (started) return;
+  started = true;
+  setTimeout(nextStep, 400);
+}
+
+function finish() {
+  finished = true;
+  $("prompt").innerHTML = ""; $("timerWrap").style.visibility = "hidden"; $("got").textContent = "";
+  $("sub").textContent = "done — here's what your remote sends";
+  const box = $("results"); box.style.display = "block"; box.innerHTML = "";
+  results.forEach((r, i) => {
+    const row = document.createElement("div");
+    row.className = "row"; row.style.animationDelay = (i * 40) + "ms";
+    const val = r.events.length ? [...new Set(r.events.map(describe))].join(" + ") : null;
+    row.innerHTML = `<span class="name">${r.name}</span> &nbsp; <span class="${val ? "val" : "none"}">${val || "nothing received"}</span>`;
+    box.appendChild(row);
+  });
+  $("copy").style.display = "block";
+}
+
+function resultsText() {
+  return "Shield remote test results\n" + results.map(r =>
+    `${r.name}: ${r.events.length ? [...new Set(r.events.map(describe))].join(" + ") : "nothing received"}`
+  ).join("\n");
+}
+
+$("copy").addEventListener("click", async e => {
+  e.stopPropagation();
+  try { await navigator.clipboard.writeText(resultsText()); $("copy").textContent = "copied — paste it to Claude"; }
+  catch { $("copy").textContent = "copy failed — take a photo instead"; }
+});
+
+// ---- listeners: catch everything a remote might send ----
+window.addEventListener("keydown", e => {
+  e.preventDefault();
+  if (e.repeat) return;
+  record({ kind: "key", key: e.key, code: e.code, keyCode: e.keyCode });
+}, true);
+window.addEventListener("keyup", e => e.preventDefault(), true);
+
+window.addEventListener("mousedown", e => {
+  if (e.target.id === "copy") return;
+  if (e.button === 0 && !started) return start();
+  if (e.button === 0) return;          // ordinary clicks don't count as remote buttons
+  e.preventDefault();
+  record({ kind: "mouse", button: e.button });
+}, true);
+window.addEventListener("mouseup", e => { if (e.button === 3 || e.button === 4) e.preventDefault(); }, true);
+window.addEventListener("contextmenu", e => e.preventDefault());
+window.addEventListener("wheel", e => record({ kind: "wheel", dir: e.deltaY < 0 ? "up" : "down" }), { passive: true });
+
+// If "back" makes the browser navigate, catch it and stay on the page.
+history.pushState({ guard: 1 }, "");
+window.addEventListener("popstate", () => { history.pushState({ guard: 1 }, ""); record({ kind: "nav" }); });
+
+// Gamepad-style remotes
+const padState = {};
+function pollPads() {
+  for (const pad of (navigator.getGamepads ? navigator.getGamepads() : [])) {
+    if (!pad) continue;
+    pad.buttons.forEach((b, i) => {
+      const k = pad.index + ":" + i;
+      if (b.pressed && !padState[k]) record({ kind: "pad", button: i });
+      padState[k] = b.pressed;
+    });
+  }
+  requestAnimationFrame(pollPads);
+}
+requestAnimationFrame(pollPads);
+window.addEventListener("gamepadconnected", e => logLine("gamepad connected: " + e.gamepad.id));
+</script>
+</body>
+</html>

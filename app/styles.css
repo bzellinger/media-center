@@ -1,0 +1,642 @@
+/* Everything is laid out on a fixed 1920x1080 "TV" stage that is scaled to fit the window. */
+:root {
+  /* --fg is the theme's text color (settings → text color); the dim shades are mixed from it */
+  --fg: #fff;
+  --dim: color-mix(in srgb, var(--fg) 50%, transparent);
+  --dimmer: color-mix(in srgb, var(--fg) 20%, transparent);
+  --sub: color-mix(in srgb, var(--fg) 30%, #8a8a8a);
+  --ease: cubic-bezier(.1, .9, .2, 1);
+  --font: "Segoe UI", "Selawik", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+/* pictures crop to fill their box instead of stretching (logos override this with "contain") */
+img { object-fit: cover; }
+html, body {
+  margin: 0; height: 100%; background: #000; color: var(--fg); overflow: hidden;
+  font-family: var(--font); font-weight: 300; user-select: none;
+}
+#stage {
+  position: absolute; left: 50%; top: 50%; width: 1920px; height: 1080px;
+  overflow: hidden; background: #000;
+}
+#bg { position: absolute; inset: 0; overflow: hidden; }
+#bg img {
+  position: absolute; left: 0; top: 0; width: 2400px; height: 1080px; object-fit: cover;
+  opacity: 0; transition: transform 900ms var(--ease), opacity 700ms ease;
+}
+#bg.drift img { animation: bgdrift 46s ease-in-out infinite alternate; }
+@keyframes bgdrift { from { scale: 1.04; translate: 0 0; } to { scale: 1.18; translate: -9% -3%; } }
+/* artist biography (music → artist → bio) */
+.bio-in { max-width: 1480px; padding-top: 30px; will-change: transform; }
+.list.bio { -webkit-mask-image: linear-gradient(transparent, #000 50px, #000 88%, transparent); mask-image: linear-gradient(transparent, #000 50px, #000 88%, transparent); }
+.bio-in p { margin: 0 0 30px; font-size: 38px; line-height: 1.45; font-weight: 400; color: rgba(255,255,255,.88); text-shadow: 0 2px 8px rgba(0,0,0,.8); }
+.bio-in p:first-child { font-size: 46px; line-height: 1.35; color: var(--fg); }
+#bg .shade { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(0,0,0,.72), rgba(0,0,0,.2) 65%, rgba(0,0,0,.45)); }
+#pages, .page { position: absolute; inset: 0; }
+#clock { position: absolute; right: 96px; top: 44px; font-size: 30px; font-weight: 400; color: var(--sub); z-index: 5; }
+
+/* things that take part in the staggered fly-in / fly-out */
+.t { transform-origin: 50% 50%; } /* items zoom from their own center (see zoomAbout in app.js) */
+
+/* ---------- home ---------- */
+/* ← on the menu: quickplay slides + zooms in from the left while the menu shrinks, slides right and dims
+   (same motion and timing as the old hub's History / New shelf) */
+.home-pano { position: absolute; inset: 0; --shelf-ease: cubic-bezier(.18, .82, .22, 1); }
+.home-menu {
+  position: absolute; left: 96px; top: 140px; transform-origin: 0 50%;
+  transition: transform 1020ms var(--shelf-ease);
+}
+.home.qp .home-menu { transform: translateX(1080px) scale(.58); }
+.home .hm-item { transition: color 160ms, opacity 620ms ease; }
+.home.qp .hm-item { opacity: .22; }
+.hm-item {
+  /* all caps, matching the giant titles they grow into */
+  position: relative; font-size: 84px; line-height: 114px; letter-spacing: -.02em; text-transform: uppercase;
+  white-space: nowrap; color: var(--dim);
+  transition: color 160ms, translate 280ms var(--ease);
+}
+.hm-item.focus { color: var(--fg); }
+/* the small play circle in front of "music" while something is playing */
+.hm-ico {
+  position: absolute; left: -86px; top: 50%; translate: 0 -46%; width: 62px; height: 62px;
+  border: 3px solid currentColor; border-radius: 50%; display: grid; place-items: center;
+  color: var(--dim); transition: color 140ms, background 140ms, border-color 140ms;
+}
+.hm-ico svg { width: 26px; height: 26px; fill: currentColor; margin-left: 4px; }
+.hm-ico.focus { color: #000; background: var(--fg); border-color: var(--fg); }
+
+/* quickplay lives to the LEFT of the menu; its last column peeks in at the left edge */
+.quickplay {
+  position: absolute; left: 96px; top: 40px; transform-origin: 0 50%;
+  opacity: 0; transform: translateX(calc(-100% - 60px)) scale(.58); pointer-events: none;
+  transition: transform 1020ms var(--shelf-ease), opacity 620ms ease;
+}
+.home.qp .quickplay { opacity: 1; transform: none; }
+.qp-label { font-size: 60px; line-height: 1.1; font-weight: 300; margin: 16px 0 12px; }
+.qp-row { display: flex; gap: 26px; margin-bottom: 56px; }
+.qp-tile {
+  position: relative; width: 170px; height: 170px; transform-origin: 50% 50%;
+  transition: scale 280ms var(--ease);
+}
+.qp-tile img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.qp-tile.focus { scale: 1.08; box-shadow: 0 20px 50px rgba(0,0,0,.6); z-index: 2; }
+.qp-tile .cap {
+  position: absolute; left: 0; top: 182px; width: 340px; font-size: 26px; white-space: nowrap;
+  opacity: 0; transition: opacity 200ms;
+}
+.qp-tile .cap span { display: block; font-size: 20px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--sub); }
+.qp-tile.focus .cap { opacity: 1; }
+.hint { position: absolute; left: 100px; bottom: 40px; font-size: 22px; font-weight: 400; color: rgba(255,255,255,.35); }
+
+/* ---------- giant section title (cut off by the top of the screen, like the Zune HD) ---------- */
+.sec-title {
+  /* uppercase: capitals have no tails (g, p, y) to hang down into the content below.
+     letter-spacing matches .hm-item so the menu word lines up exactly as it grows into the title */
+  position: absolute; left: 56px; top: -205px; font-size: 460px; line-height: 1; letter-spacing: -.02em;
+  text-transform: uppercase; white-space: nowrap; transform-origin: 0 70%; transition: translate 900ms var(--ease);
+}
+.z { transform-origin: 0 70%; }
+.zs { transform-origin: 0 0; }
+.sec-title.ghost { z-index: 4; pointer-events: none; transform-origin: 0 0; transition: none; }
+
+/* ---------- cover grid (albums) ---------- */
+.grid-inner { position: relative; will-change: transform; }
+.tile {
+  position: absolute; transform-origin: 50% 50%;
+  transition: scale 280ms var(--ease);
+}
+.tile img { width: 100%; height: 100%; display: block; }
+.tile.focus { scale: 1.08; z-index: 2; box-shadow: 0 18px 44px rgba(0,0,0,.65); }
+.tile .tcap {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 46px 14px 12px; font-size: 24px; line-height: 1.2;
+  background: linear-gradient(transparent, rgba(0,0,0,.88)); opacity: 0; transition: opacity 150ms;
+}
+.tile .tcap b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .tcap span { display: block; font-size: 20px; font-weight: 400; color: #bbb; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile.focus .tcap { opacity: 1; }
+.tile.letter { background: rgba(255,255,255,.07); outline: 2px solid rgba(255,255,255,.22); outline-offset: -2px; }
+.tile.letter span { position: absolute; left: 18px; bottom: 4px; font-size: 120px; line-height: 1; }
+
+/* ---------- pivot (music): small bold caps labels under the giant title ---------- */
+.pivot-clip { position: absolute; left: 100px; right: 0; top: 214px; height: 72px; overflow: hidden; }
+.pivot-strip { position: absolute; left: 0; top: 0; display: flex; gap: 44px; white-space: nowrap; }
+.pv {
+  font-size: 40px; line-height: 56px; font-weight: 600; text-transform: uppercase; letter-spacing: .01em;
+  color: rgba(255,255,255,.32); transition: color 450ms;
+}
+.pv.on { color: var(--fg); }
+.pivot-body { position: absolute; left: 96px; right: 96px; top: 300px; bottom: 0; }
+.pv-sub { position: absolute; left: 100px; top: 270px; font-size: 26px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--sub); white-space: nowrap; }
+.has-sub .pivot-body { top: 330px; }
+
+/* album page: bold caps album name, round action buttons, plain song list */
+.alb-head { position: absolute; left: 100px; top: 210px; right: 96px; }
+.alb-head .an { font-size: 48px; line-height: 1.15; font-weight: 700; text-transform: uppercase; letter-spacing: .01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.alb-head .sc { font-size: 26px; }
+.alb-btns { display: flex; gap: 40px; height: 120px; }
+.rb { display: flex; flex-direction: column; align-items: center; gap: 8px; color: var(--dim); transition: color 140ms; }
+.rb .ring {
+  width: 84px; height: 84px; border: 3px solid currentColor; border-radius: 50%;
+  display: grid; place-items: center; transition: background 140ms, border-color 140ms;
+}
+.rb svg { width: 36px; height: 36px; fill: currentColor; }
+.rb .lbl { font-size: 18px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.rb.focus { color: var(--fg); }
+.rb.focus .ring { background: var(--fg); border-color: var(--fg); }
+.rb.focus svg { fill: #000; }
+.alb-list { position: relative; height: 640px; }
+.dimfocus .row.focus { color: var(--dim); translate: 0 0; }
+
+/* ---------- lists ---------- */
+.list { position: absolute; left: 0; right: 0; top: 0; overflow: hidden; }
+.list-inner { will-change: transform; }
+.row {
+  display: flex; align-items: center; gap: 28px; color: var(--dim); white-space: nowrap;
+  transition: color 140ms, translate 260ms var(--ease);
+}
+.row.focus { color: var(--fg); }
+.row .big { font-size: 66px; letter-spacing: -.01em; }
+.row .cap { font-size: 44px; font-weight: 600; text-transform: uppercase; letter-spacing: .01em; overflow: hidden; text-overflow: ellipsis; }
+.row .pb {
+  width: 60px; height: 60px; flex: none; border: 3px solid currentColor; border-radius: 50%;
+  display: grid; place-items: center;
+}
+.row .pb svg { width: 24px; height: 24px; fill: currentColor; margin-left: 4px; }
+.row .tx { flex: 1; min-width: 0; }
+.row .t1, .row .t2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .t1 { font-size: 46px; line-height: 1.2; font-weight: 400; }
+.row .t2 { font-size: 28px; font-weight: 400; color: var(--sub); }
+.row img { width: 112px; height: 112px; flex: none; object-fit: cover; }
+.row .t1.caps { font-size: 40px; font-weight: 600; text-transform: uppercase; letter-spacing: .01em; }
+.row .t2.sc, .sc { font-size: 24px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--sub); }
+.r-track .t1 { flex: 1; min-width: 0; font-size: 46px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
+.r-track .dur { font-size: 26px; font-weight: 400; color: var(--sub); }
+.r-track.playing .t1::after { content: "  ♪"; color: var(--sub); }
+
+/* ---------- sub pages ---------- */
+.ph-sub {
+  position: absolute; left: 100px; top: 214px; font-size: 40px; line-height: 56px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .01em; color: var(--sub); white-space: nowrap;
+}
+.ph-note { position: absolute; left: 100px; top: 320px; font-size: 48px; color: var(--dim); }
+.page-body { position: absolute; left: 96px; right: 96px; top: 300px; bottom: 0; }
+.album-art { position: absolute; left: 100px; top: 310px; width: 520px; height: 520px; object-fit: cover; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
+.album-tracks { position: absolute; left: 700px; right: 96px; top: 300px; bottom: 0; }
+
+/* ---------- loading / empty messages, toast ---------- */
+.list-msg { padding-top: 20px; font-size: 44px; color: var(--dim); }
+.toast {
+  position: absolute; left: 50%; bottom: 60px; z-index: 6; translate: -50% 20px; opacity: 0;
+  padding: 18px 36px; background: rgba(20,20,20,.92); border: 2px solid rgba(255,255,255,.25);
+  font-size: 30px; font-weight: 400; white-space: nowrap; transition: opacity 250ms, translate 350ms var(--ease);
+}
+.toast.on { opacity: 1; translate: -50% 0; }
+
+/* ---------- posters (movies, shows) ---------- */
+.tile.poster { background: rgba(255,255,255,.06); }
+/* artists: round photos with the name below (Emby style) */
+.tile.artist, .tile.artist.focus { box-shadow: none; }
+.tile.artist .circ { width: 100%; aspect-ratio: 1; border-radius: 50%; overflow: hidden; background: rgba(255,255,255,.06); transition: box-shadow 280ms var(--ease); }
+.tile.artist.focus .circ { box-shadow: 0 18px 44px rgba(0,0,0,.65); }
+.sz-s .tile.artist .nm { font-size: 21px; }
+.sz-s .tile .tcap { font-size: 20px; }
+.sz-l .tile .tcap { font-size: 28px; }
+.tile.artist .ini { width: 100%; height: 100%; display: grid; place-items: center; font-size: 72px; font-weight: 300; color: rgba(255,255,255,.8); }
+.tile.artist .nm {
+  margin-top: 12px; text-align: center; font-size: 24px; line-height: 1.2; color: var(--dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color 140ms;
+}
+.tile.artist.focus .nm { color: var(--fg); }
+.tile img { object-fit: cover; }
+.tile .noimg { position: absolute; inset: 0; padding: 18px; font-size: 30px; line-height: 1.2; color: var(--dim); overflow: hidden; }
+.qp-tile img { object-fit: cover; }
+
+/* ---------- movie / episode details ---------- */
+.vid-art { position: absolute; left: 100px; top: 310px; width: 400px; height: 600px; object-fit: cover; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
+.video-page.ep .vid-art { width: 640px; height: 360px; }
+.vid-info { position: absolute; left: 580px; right: 140px; top: 310px; }
+.video-page.ep .vid-info { left: 820px; }
+.vid-info .overview {
+  font-size: 36px; line-height: 1.45; color: rgba(255,255,255,.88);
+  display: -webkit-box; -webkit-line-clamp: 7; -webkit-box-orient: vertical; overflow: hidden;
+}
+.vid-info .genres { margin-top: 26px; font-size: 28px; font-weight: 400; color: var(--sub); }
+.vid-info .btn-row { margin-top: 44px; }
+
+/* ---------- episode rows ---------- */
+/* movies / shows as a list (view menu → list): small poster, title, year · length · rating */
+.r-video { display: flex; align-items: center; gap: 30px; }
+.r-video .pt { height: calc(100% - 16px); width: auto; aspect-ratio: 2 / 3; flex: none; object-fit: cover; }
+.r-video .pt.none { background: rgba(255,255,255,.08); }
+.row.r-album img { height: calc(100% - 20px); width: auto; aspect-ratio: 1; }
+
+/* ---------- the hidden view menu: slides in from the left, the covers step aside (app.js: Views) ---------- */
+.vdrawer {
+  position: absolute; left: 0; top: 330px; bottom: 0; width: 470px; padding: 0 0 0 96px; z-index: 4;
+  background: linear-gradient(90deg, rgba(0,0,0,.92), rgba(0,0,0,.82) 80%, rgba(0,0,0,0));
+  transform: translateX(-100%); opacity: 0;
+  transition: transform 420ms var(--ease), opacity 300ms ease;
+}
+.pivot-page.drawer .vdrawer { transform: none; opacity: 1; }
+.pivot-body { transition: transform 420ms var(--ease), opacity 300ms ease; }
+.pivot-page.drawer .pivot-body { transform: translateX(400px); opacity: .35; }
+.vd-head { color: var(--fg); margin-bottom: 6px; }
+.vd-lab { margin: 22px 0 6px; }
+.vd-opt {
+  position: relative; width: 300px; padding: 4px 14px 4px 34px; font-size: 32px; line-height: 40px; color: var(--dim);
+  transition: color 140ms, background 140ms;
+}
+.vd-opt.on { color: var(--fg); }
+.vd-opt.on::before { content: ""; position: absolute; left: 12px; top: 50%; width: 10px; height: 10px; margin-top: -5px; border-radius: 50%; background: currentColor; }
+.vd-opt.focus { background: var(--fg); color: #000; }
+.r-episode img.ep, .r-episode .ep { width: 224px; height: 126px; flex: none; object-fit: cover; }
+.r-episode .ep.none { background: rgba(255,255,255,.08); }
+.r-episode .eno { display: inline-block; min-width: 64px; color: var(--sub); }
+
+/* ---------- settings ---------- */
+.form { position: absolute; left: 100px; top: 300px; width: 1040px; }
+.form.col2 { left: 1220px; width: 620px; } /* second column (apps: voice assistant) */
+.form.col1 { width: 1000px; }
+.field { height: 132px; padding-top: 8px; color: var(--dim); transition: color 140ms, translate 260ms var(--ease); }
+.field.focus { color: var(--fg); }
+.lab, .field .lab {
+  font-size: 26px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--sub);
+}
+.field .val {
+  all: unset; display: block; width: 100%; box-sizing: border-box; margin-top: 4px;
+  font-family: var(--font); font-weight: 300; font-size: 54px; line-height: 1.3; color: inherit;
+  caret-color: var(--fg); border-bottom: 3px solid transparent; transition: border-color 200ms;
+}
+.field .val::placeholder { color: rgba(255,255,255,.2); font-size: 40px; }
+.field.editing .val { border-bottom-color: var(--fg); }
+.btn-row { display: flex; gap: 28px; margin-top: 26px; }
+.btn {
+  font-size: 32px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em;
+  padding: 14px 42px; border: 3px solid var(--dim); border-radius: 999px; color: var(--dim);
+  transition: color 140ms, background 140ms, border-color 140ms;
+}
+.btn.focus { color: #000; background: var(--fg); border-color: var(--fg); }
+.status { margin-top: 36px; min-height: 44px; font-size: 32px; font-weight: 400; color: var(--sub); }
+.status.ok { color: var(--fg); }
+.status.ok b { font-weight: 600; }
+.status.err { color: #ff8f8f; }
+.libs { position: absolute; left: 1260px; right: 96px; top: 308px; max-height: 700px; overflow: hidden; }
+.libs .lab { margin-bottom: 14px; }
+.libs .lib { font-size: 48px; line-height: 1.45; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.libs .lib span { margin-left: 16px; font-size: 24px; font-weight: 400; color: var(--sub); }
+.libs .lib.none { font-size: 30px; color: var(--sub); white-space: normal; }
+
+/* ---------- now playing ---------- */
+.np-bg { position: absolute; inset: -4%; overflow: hidden; }
+.np-bg img {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+  transition: opacity 1400ms ease; animation: kenburns 28s ease-in-out infinite alternate;
+}
+@keyframes kenburns {
+  from { transform: scale(1.05) translate(0, 0); }
+  to   { transform: scale(1.3) translate(-4%, -3%); }
+}
+.np-shade { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(0,0,0,.72), rgba(0,0,0,.45) 60%, rgba(0,0,0,.6)); }
+.np-back {
+  position: absolute; left: 96px; top: 56px; width: 92px; height: 92px; border: 4px solid var(--fg); border-radius: 50%;
+  display: grid; place-items: center;
+}
+.np-back svg { width: 46px; height: 46px; fill: var(--fg); }
+.np-head { position: absolute; left: 96px; top: 180px; right: 96px; }
+.np-artist { font-size: 54px; line-height: 1.1; font-weight: 700; text-transform: uppercase; letter-spacing: .01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-album { font-size: 46px; line-height: 1.1; font-weight: 400; text-transform: uppercase; letter-spacing: .01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-art { position: absolute; left: 96px; top: 330px; width: 640px; height: 640px; object-fit: cover; box-shadow: 0 30px 80px rgba(0,0,0,.7); }
+.np-side { position: absolute; left: 820px; right: 120px; top: 560px; }
+.np-times { display: flex; align-items: baseline; gap: 24px; font-size: 28px; font-weight: 600; color: var(--sub); }
+.np-times .rem { margin-left: auto; }
+.np-bar { height: 5px; margin-top: 12px; background: rgba(255,255,255,.22); }
+.np-bar i { display: block; height: 100%; width: 0; background: var(--fg); }
+.np-state { font-size: 24px; text-transform: uppercase; letter-spacing: .04em; opacity: 0; transition: opacity 300ms; }
+.np.paused .np-state { opacity: 1; }
+.np-title { margin-top: 26px; font-size: 80px; line-height: 1.15; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-next { margin-top: 10px; font-size: 26px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-next b { font-weight: 600; color: var(--fg); }
+.np-ctl { display: flex; gap: 48px; margin-top: 54px; }
+.np-ctl .b {
+  width: 104px; height: 104px; border: 4px solid var(--fg); border-radius: 50%;
+  display: grid; place-items: center; transition: scale 160ms ease-out, background 160ms;
+}
+.np-ctl .b.hit { scale: .86; background: rgba(255,255,255,.25); }
+.np-ctl svg { width: 44px; height: 44px; fill: var(--fg); transition: fill 160ms; }
+.np-ctl .b.focus { background: var(--fg); scale: 1.08; }  /* the button Enter will press */
+.np-ctl .b.focus svg { fill: #000; }
+.np-ctl .b.focus.hit { scale: .94; }
+.np-ctl .b.on:not(.focus) { background: rgba(255,255,255,.18); } /* lyrics are switched on */
+
+/* ---------- lyrics: the cover tucks up left, the words scroll by on the right (app.js: Lyrics) ---------- */
+.np-title { transition: font-size 600ms var(--ease), margin 600ms var(--ease); }
+.np-ctl .b { transition: scale 160ms ease-out, background 160ms, width 600ms var(--ease), height 600ms var(--ease); }
+.np.lyr .np-art, .np.np.lyr.idle .np-art { /* (doubled .np: wins over the "when info hides" cover rules) */ left: 96px; top: 330px; width: 360px; height: 360px; opacity: 1; }
+.np.lyr .np-side { left: 96px; right: 1150px; top: 730px; }
+.np.lyr .np-title { margin-top: 18px; font-size: 52px; }
+.np.lyr .np-ctl { gap: 26px; margin-top: 30px; }
+.np.lyr .np-ctl .b { width: 82px; height: 82px; }
+.np.lyr .np-ctl svg { width: 36px; height: 36px; }
+.np-lyr {
+  position: absolute; left: 820px; right: 96px; top: 150px; bottom: 50px; overflow: hidden; pointer-events: none;
+  opacity: 0; transform: translateX(6%); transition: opacity 480ms ease, transform 560ms var(--ease);
+  -webkit-mask-image: linear-gradient(transparent, #000 14%, #000 80%, transparent);
+          mask-image: linear-gradient(transparent, #000 14%, #000 80%, transparent);
+}
+.np.lyr .np-lyr { opacity: 1; transform: none; transition-delay: 200ms; }
+.np-lyr-in { transition: transform 700ms var(--ease); will-change: transform; }
+.np-lyr-in p {
+  margin: 0 0 22px; font-size: 50px; line-height: 1.25; font-weight: 400; color: var(--sub);
+  transform-origin: 0 50%; transition: color 400ms, opacity 400ms, scale 500ms var(--ease);
+}
+.np-lyr-in p.past { opacity: .45; }
+.np-lyr-in p.now { color: var(--fg); font-weight: 600; scale: 1.04; }
+.np.lyr .np-shade { background: linear-gradient(90deg, rgba(0,0,0,.7), rgba(0,0,0,.55) 40%, rgba(0,0,0,.78)); }
+
+/* ---------- tv guide ---------- */
+/* grid: channels column 100–400, shows 420–1824 (3 hours × 468px), 6 rows × 92px from y 430 */
+.gd-info { position: absolute; left: 100px; right: 96px; top: 206px; height: 160px; }
+.gd-info .it { font-size: 46px; line-height: 1.2; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gd-info .it span { color: var(--sub); }
+.gd-info .sc { margin-top: 4px; }
+.gd-info .io {
+  margin-top: 8px; font-size: 26px; line-height: 1.35; font-weight: 400; color: var(--sub); max-width: 1500px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.gd-head { position: absolute; left: 420px; right: 96px; top: 382px; height: 40px; overflow: hidden; }
+.gd-x, .gd-y { position: relative; will-change: transform; }
+.gd-time {
+  position: absolute; top: 0; padding-left: 10px; border-left: 2px solid rgba(255,255,255,.22);
+  font-size: 22px; line-height: 36px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--sub); white-space: nowrap;
+}
+.gd-chans { position: absolute; left: 100px; width: 300px; top: 430px; height: 552px; overflow: hidden; }
+.gd-ch {
+  position: absolute; left: 0; right: 0; height: 92px; display: flex; align-items: center; gap: 14px;
+  color: var(--dim); transition: color 140ms;
+}
+.gd-ch .logo { height: 44px; width: 70px; object-fit: contain; flex: none; }
+.gd-ch .num { width: 74px; flex: none; font-size: 26px; font-weight: 400; }
+.gd-ch .nm { font-size: 28px; font-weight: 600; text-transform: uppercase; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gd-ch.focus { color: var(--fg); }
+.gd-grid { position: absolute; left: 420px; right: 96px; top: 430px; height: 552px; overflow: hidden; }
+.gd-row { position: absolute; left: 0; height: 92px; width: 6000px; }
+.gd-cell {
+  position: absolute; top: 4px; height: 84px; box-sizing: border-box; padding: 10px 18px;
+  background: rgba(255,255,255,.07); color: var(--dim); overflow: hidden; white-space: nowrap;
+  transition: background 140ms, color 140ms;
+}
+.gd-cell .pt { font-size: 30px; line-height: 1.2; font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
+.gd-cell .ps { font-size: 19px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--sub); overflow: hidden; text-overflow: ellipsis; }
+.gd-cell .ps b { color: var(--fg); font-weight: 700; }
+.gd-cell.on { background: rgba(255,255,255,.14); color: rgba(255,255,255,.85); }
+.gd-cell.focus { background: var(--fg); color: #000; }
+.gd-cell.focus .ps, .gd-cell.focus .ps b { color: #444; }
+.gd-cell.empty { font-size: 26px; line-height: 64px; color: var(--sub); }
+.gd-now { position: absolute; top: 0; width: 3px; height: 552px; background: var(--fg); box-shadow: 0 0 12px rgba(255,255,255,.6); pointer-events: none; }
+.gd-msg { position: absolute; left: 420px; top: 450px; font-size: 36px; color: var(--sub); }
+.gd-msg:empty { display: none; }
+.gd-msg.note { left: 100px; top: 1004px; font-size: 22px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+
+/* ---------- guide: show details (watch / back) ---------- */
+.pg-art {
+  position: absolute; left: 100px; top: 330px; width: 640px; height: 360px; overflow: hidden;
+  background: rgba(255,255,255,.06); display: grid; place-items: center; box-shadow: 0 30px 80px rgba(0,0,0,.6);
+}
+.pg-art img { width: 100%; height: 100%; object-fit: cover; }
+.pg-art img.logo { width: 60%; height: 60%; object-fit: contain; }
+.pg-art .num { font-size: 140px; font-weight: 300; color: var(--dim); }
+.vid-info.pg-info { left: 820px; top: 330px; }
+/* portrait poster (Emby's usual guide picture): a tall frame, the text moves in beside it */
+.program-page.portrait .pg-art { width: 420px; height: 630px; }
+.program-page.portrait .pg-info { left: 600px; }
+.pg-ep { font-size: 42px; line-height: 1.2; margin-bottom: 14px; }
+
+/* ---------- watching live tv ---------- */
+.lv-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.lv-status { position: absolute; left: 50%; top: 50%; translate: -50% -50%; font-size: 40px; color: var(--sub); white-space: nowrap; }
+.lv-status:empty { display: none; }
+.lv-osd {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 140px 96px 70px;
+  background: linear-gradient(transparent, rgba(0,0,0,.88)); opacity: 0;
+  transition: opacity 400ms;   /* the lines and buttons bring their own motion (app.js: animateIn / animateButtons) */
+}
+.lv-osd.on { opacity: 1; }
+.lv-ch { font-size: 40px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em; white-space: pre; }
+.lv-title { font-size: 76px; line-height: 1.15; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lv-sub { margin-top: 6px; }
+.lv-times { display: flex; justify-content: space-between; max-width: 900px; margin-top: 18px; }
+.lv-bar { height: 5px; margin-top: 8px; max-width: 900px; background: rgba(255,255,255,.22); }
+.lv-bar i { display: block; height: 100%; width: 0; background: var(--fg); }
+
+/* ---------- live tv layer (keeps playing behind the menus) ---------- */
+#pages { z-index: 2; }
+.vlayer {
+  position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; z-index: 1; overflow: hidden; background: #000;
+  transition: left 600ms var(--ease), top 600ms var(--ease), width 600ms var(--ease), height 600ms var(--ease), opacity 400ms;
+}
+.vlayer .lv-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.vlayer .vl-scrim { position: absolute; inset: 0; background: rgba(0,0,0,.62); opacity: 0; transition: opacity 500ms; pointer-events: none; }
+.vlayer.off { opacity: 0; visibility: hidden; transition: opacity 400ms, visibility 0s 400ms; }
+.vlayer.behind .vl-scrim { opacity: 1; }                 /* full screen, dimmed under the menus */
+.vlayer.corner {                                          /* small window above the menus */
+  left: 1396px; top: 762px; width: 464px; height: 261px; z-index: 3;
+  box-shadow: 0 20px 60px rgba(0,0,0,.75); outline: 2px solid rgba(255,255,255,.35);
+}
+.live-page { background: transparent; }
+
+/* ---------- picture in picture: two channels side by side (app.js: Dual) ---------- */
+.vlayer .lv-video {
+  transition: left 440ms var(--ease), width 440ms var(--ease), opacity 420ms ease, transform 440ms var(--ease);
+}
+.vlayer .lv-video.main { left: 0; width: 100%; }
+.vlayer .lv-video.side { left: 0; width: 50%; opacity: 0; transform: translateX(-8%); pointer-events: none; }
+.vlayer.dual .lv-video.main { left: 50%; width: 50%; }                      /* the picture glides to the right half */
+.vlayer.dual-play .lv-video.side { opacity: 1; transform: none; }           /* the second one comes in on the left */
+.vlayer.dual-play .lv-video.aud { outline: 4px solid var(--fg); outline-offset: -4px; } /* the side you hear */
+.vlayer.keep-side .lv-video.side { width: 100%; opacity: 1; transform: none; } /* left one takes the whole screen */
+.vlayer.keep-side .lv-video.main { opacity: 0; transform: translateX(10%); }
+.lv-dual { position: absolute; inset: 0; pointer-events: none; }
+.lv-pick { position: absolute; left: 96px; top: 120px; width: 768px; }
+.lv-pick-h { margin-bottom: 18px; }
+.lv-pick .list { overflow: hidden; }
+.r-dual { display: flex; align-items: center; gap: 26px; color: var(--dim); transition: color 140ms; }
+.r-dual .n { width: 110px; flex: none; font-size: 40px; font-weight: 300; }
+.r-dual .tx { min-width: 0; }
+.r-dual .t1 { font-size: 34px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.r-dual .t2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.r-dual.focus { color: var(--fg); }
+.r-dual.main { opacity: .45; }
+.lv-tags { position: absolute; left: 0; right: 0; top: 40px; display: flex; }
+.lv-tag {
+  width: 50%; padding: 0 40px; font-size: 24px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em;
+  color: rgba(255,255,255,.85); text-shadow: 0 2px 8px rgba(0,0,0,.9); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lv-tag b { font-weight: 700; color: #fff; }
+.lv-dhint {
+  position: absolute; left: 0; right: 0; bottom: 48px; text-align: center; opacity: 0;
+  text-shadow: 0 2px 8px rgba(0,0,0,.9);
+}
+.vchip {
+  position: absolute; right: 96px; top: 86px; z-index: 5; font-size: 22px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .03em; color: var(--sub); opacity: 0; transition: opacity 300ms; white-space: nowrap;
+}
+.vchip.on { opacity: 1; }
+.vchip b { color: #fff; background: #c8102e; padding: 2px 8px; margin-right: 8px; font-weight: 700; }
+.set-lab { margin-top: 40px; margin-bottom: 12px; }
+
+/* ---------- section labels are selectable ---------- */
+/* while focus is on the labels, the current one gets a bar under it and the content's highlight dims */
+.pv { position: relative; }
+.pv::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -6px; height: 5px; background: var(--fg);
+  transform: scaleX(0); transform-origin: 0 50%; transition: transform 300ms var(--ease);
+}
+.pivot-page.head .pv.on::after { transform: scaleX(1); }
+.dimfocus .tile.focus { scale: 1; box-shadow: none; }
+.dimfocus .tile.focus .tcap { opacity: 0; }
+
+/* ---------- settings: sections (emby server · appearance · playback) ---------- */
+.set-body { position: absolute; inset: 0; padding-top: 310px; }
+.opt-row {
+  display: flex; align-items: center; gap: 40px; height: 104px; margin-left: 100px; color: var(--dim);
+  transition: color 140ms;
+}
+.opt-row .lab { width: 620px; font-size: 32px; color: inherit; }
+.opt-row.focus { color: var(--fg); }
+.opt-row.focus .btn { color: #000; background: var(--fg); border-color: var(--fg); }
+
+/* ---------- now playing: info fades away after a few seconds (settings → playback) ---------- */
+.np-back, .np-head { transition: opacity 700ms ease; }
+.np-side { transition: opacity 700ms ease, left 600ms var(--ease), right 600ms var(--ease), top 600ms var(--ease); } /* moves under the cover for lyrics */
+.np-art { transition: opacity 700ms ease, left 800ms var(--ease), top 800ms var(--ease), width 600ms var(--ease), height 600ms var(--ease); }
+.np-shade { transition: opacity 1200ms ease; }
+.np.idle .np-back, .np.idle .np-head, .np.idle .np-side { opacity: 0; }
+.np.idle.art-hide .np-art { opacity: 0; }
+.np.idle.art-center .np-art { left: 640px; top: 220px; }   /* 640px cover centered on the 1920×1080 screen */
+.np.idle .np-shade { opacity: .55; }                        /* backdrop comes up a little once the info is gone */
+
+/* ---------- video player controls (Enter shows them; Kodi-style) ---------- */
+/* INFO unfolds: the description grows open (and the lines above ease upward) instead of popping in */
+.lv-ov {
+  display: grid; grid-template-rows: 0fr; opacity: 0; margin-top: 0; max-width: 1300px;
+  transition: grid-template-rows 480ms var(--ease), opacity 380ms ease, margin-top 480ms var(--ease);
+}
+.lv-ov > div {
+  min-height: 0; overflow: hidden; font-size: 30px; line-height: 1.4; font-weight: 400; color: rgba(255,255,255,.85);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+}
+.lv-osd.info .lv-ov { grid-template-rows: 1fr; opacity: 1; margin-top: 14px; }
+
+/* the round buttons, with one white disc that glides to whichever is picked */
+.lv-ctl { display: none; position: relative; gap: 40px; margin-top: 34px; }
+.lv-osd.ctl .lv-ctl { display: flex; }
+.lv-hl {
+  position: absolute; left: 0; top: 0; width: 84px; height: 84px; border-radius: 50%;
+  background: var(--fg); pointer-events: none; transition: transform 320ms var(--ease);
+}
+.lv-ctl .ring { position: relative; z-index: 1; }
+.lv-ctl .rb.focus .ring { background: transparent; border-color: var(--fg); }
+.lv-ctl .ring svg { transition: fill 200ms; }
+.lv-ctl .rb.focus .ring svg { fill: #000; }
+
+/* big faint glyphs in the middle of the picture: −30 / +30 / live, and ❚❚ while paused */
+.lv-glyph {
+  position: absolute; left: 50%; top: 44%; translate: -50% -50%; opacity: 0; pointer-events: none;
+  font-size: 200px; font-weight: 200; line-height: 1; letter-spacing: -.03em; text-transform: uppercase;
+  color: #fff; text-shadow: 0 8px 50px rgba(0,0,0,.6);
+}
+.lv-glyph svg { width: 200px; height: 200px; fill: #fff; filter: drop-shadow(0 8px 40px rgba(0,0,0,.6)); }
+/* the new channel number, big and faint, for a moment after changing channel */
+.lv-chnum {
+  position: absolute; right: 96px; top: 96px; opacity: 0; pointer-events: none; transform-origin: 100% 0;
+  font-size: 240px; font-weight: 200; line-height: 1; color: #fff; text-shadow: 0 8px 50px rgba(0,0,0,.6);
+}
+/* a thin time bar that peeks up from the bottom after a skip, then slides away */
+.lv-peek {
+  position: absolute; left: 96px; right: 96px; bottom: 44px; opacity: 0; translate: 0 160%;
+  transition: translate 450ms var(--ease), opacity 300ms;
+}
+.lv-peek.on { opacity: 1; translate: 0 0; }
+.lv-peek .lv-bar { max-width: none; margin-top: 8px; }
+
+/* ---------- music screensaver (app.js: Saver) ---------- */
+.saver {
+  position: absolute; inset: 0; z-index: 60; background: #000; overflow: hidden;
+  opacity: 0; visibility: hidden; transition: opacity 1200ms ease, visibility 0s 1200ms;
+}
+.saver.on { opacity: 1; visibility: visible; transition: opacity 1600ms ease, visibility 0s; }
+.sv-bg img {
+  position: absolute; inset: -6%; width: 112%; height: 112%; object-fit: cover; opacity: 0;
+  transition: opacity 2400ms ease; animation: 32s ease-in-out infinite alternate both;
+}
+.sv-bg img.in { opacity: 1; }
+@keyframes svdrift1 { from { transform: scale(1.02) translate(0, 0); } to { transform: scale(1.22) translate(-5%, -3%); } }
+@keyframes svdrift2 { from { transform: scale(1.2) translate(-4%, 2%); } to { transform: scale(1.04) translate(3%, -2%); } }
+@keyframes svdrift3 { from { transform: scale(1.1) translate(4%, 3%); } to { transform: scale(1.26) translate(-2%, -4%); } }
+.sv-shade { position: absolute; inset: 0; background: linear-gradient(rgba(0,0,0,.25), rgba(0,0,0,.15) 40%, rgba(0,0,0,.75)); }
+/* the giant names crawling across, Zune style: each line its own size, speed and direction */
+.sv-crawl { position: absolute; left: 0; right: 0; white-space: nowrap; overflow: hidden; pointer-events: none; text-transform: uppercase; }
+.sv-crawl div { display: inline-block; animation: svcrawl linear infinite; }
+.sv-crawl span { display: inline-block; padding-right: .6em; }
+.sv-crawl.a { top: 40px; font-size: 330px; line-height: 1; font-weight: 700; color: rgba(255,255,255,.2); letter-spacing: -.02em; }
+.sv-crawl.a div { animation-duration: 70s; }
+.sv-crawl.b { top: 390px; font-size: 170px; line-height: 1; font-weight: 300; color: rgba(255,255,255,.42); text-transform: none; }
+.sv-crawl.b div { animation-duration: 48s; animation-direction: reverse; }
+.sv-crawl.c { top: 590px; font-size: 96px; line-height: 1; font-weight: 600; color: rgba(255,255,255,.16); }
+.sv-crawl.c div { animation-duration: 90s; }
+@keyframes svcrawl { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+/* small "now playing" corner */
+.sv-now { position: absolute; left: 96px; bottom: 80px; display: flex; align-items: flex-end; gap: 30px; text-shadow: 0 2px 8px rgba(0,0,0,.85); }
+.sv-art { width: 180px; height: 180px; object-fit: cover; box-shadow: 0 20px 60px rgba(0,0,0,.7); }
+.sv-tx { width: 760px; }
+.sv-t1 { font-size: 52px; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sv-t2 { margin-top: 6px; color: rgba(255,255,255,.8); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sv-bar { height: 4px; margin-top: 16px; background: rgba(255,255,255,.25); }
+.sv-bar i { display: block; height: 100%; width: 0; background: var(--fg); transition: width 1s linear; }
+.sv-bio {
+  position: absolute; right: 96px; bottom: 84px; width: 760px; font-size: 28px; line-height: 1.45; color: rgba(255,255,255,.85);
+  text-shadow: 0 2px 8px rgba(0,0,0,.9); opacity: 0; transform: translateY(14px); transition: opacity 900ms ease, transform 900ms var(--ease);
+}
+.sv-bio.in { opacity: 1; transform: none; }
+
+/* ---------- movies & episodes (app.js: VodPage) ---------- */
+.vod-page { background: #000; }
+.vod-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+
+/* ---------- keeping the controls readable over any picture ----------
+   A deeper shade rises behind the player controls, every line of text gets a soft dark shadow, and
+   the round buttons get a dark fill so a bright scene can't wash them out. */
+.lv-osd {
+  padding-top: 260px;
+  background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,.5) 28%, rgba(0,0,0,.82) 60%, rgba(0,0,0,.94));
+}
+.lv-osd, .lv-peek, .lv-tags, .lv-dhint, .lv-status, .vchip, .np-head, .np-side, .np-lyr, .lv-pick {
+  text-shadow: 0 2px 6px rgba(0,0,0,.85), 0 0 22px rgba(0,0,0,.55);
+}
+.lv-osd .lv-sub, .lv-osd .lv-times, .lv-osd .rb .lbl { color: rgba(255,255,255,.82); } /* small print a step brighter */
+.lv-osd .rb .ring, .np-ctl .b, .np-back { background-color: rgba(0,0,0,.38); }
+.lv-osd .rb.focus .ring { background-color: transparent; }   /* the white disc shows through */
+.np-ctl .b.focus { background-color: var(--fg); }
+.lv-osd .rb svg, .np-ctl svg, .np-back svg { filter: drop-shadow(0 1px 3px rgba(0,0,0,.7)); }
+.lv-osd .rb.focus svg, .np-ctl .b.focus svg { filter: none; }
+.lv-osd .lv-bar, .np-bar { box-shadow: 0 1px 6px rgba(0,0,0,.6); }
+.lv-peek { padding: 60px 96px 44px; left: 0; right: 0; bottom: 0; background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,.75)); }
+.lv-pick { padding: 24px 30px 30px; margin: -24px 0 0 -30px; background: rgba(0,0,0,.72); }
+.lv-tag { background: linear-gradient(rgba(0,0,0,.6), rgba(0,0,0,0)); padding-top: 12px; padding-bottom: 24px; }
+.np-shade { background: linear-gradient(90deg, rgba(0,0,0,.8), rgba(0,0,0,.55) 60%, rgba(0,0,0,.7)), linear-gradient(rgba(0,0,0,0) 50%, rgba(0,0,0,.45)); }
+
+/* ---------- radio on the now playing screen ---------- */
+.np.live .np-times, .np.live .np-bar { visibility: hidden; }  /* a live stream has no length */
+.np.live .np-bg img { filter: blur(28px) brightness(.55) saturate(1.1); } /* the song cover, softened, as the backdrop */
+
+/* ---------- settings: notes, hidden menu items ---------- */
+.set-note { margin: 30px 0 0; max-width: 1150px; font-size: 26px; line-height: 1.45; font-weight: 400; color: var(--sub); }
+.set-body > .set-note { margin-left: 100px; }
+.opt-row.off .lab { opacity: .5; }
+
+/* no clock over full screen playback (the "fullplay" class is set by app.js when the tv or now playing screen is up) */
+#clock { transition: opacity 400ms; }
+#stage.fullplay #clock { opacity: 0; }
+
+/* mouse pointer hidden after 3 seconds without movement (app.js: pointerIdle) */
+html.nopointer, html.nopointer * { cursor: none !important; }
