@@ -44,7 +44,7 @@ html, body {
 .home-pano { position: absolute; inset: 0; --shelf-ease: cubic-bezier(.18, .82, .22, 1); }
 .home-menu {
   position: absolute; left: 96px; top: 140px; transform-origin: 0 50%;
-  transition: transform 1020ms var(--shelf-ease);
+  transition: transform 1020ms var(--shelf-ease), translate 520ms var(--ease); /* translate: scrolling a long menu */
 }
 .home.qp .home-menu { transform: translateX(1080px) scale(.58); }
 .home .hm-item { transition: color 160ms, opacity 620ms ease; }
@@ -229,6 +229,46 @@ html, body {
 .r-video .pt { height: calc(100% - 16px); width: auto; aspect-ratio: 2 / 3; flex: none; object-fit: cover; }
 .r-video .pt.none { background: rgba(255,255,255,.08); }
 .row.r-album img { height: calc(100% - 20px); width: auto; aspect-ratio: 1; }
+
+/* ---------- home videos & pictures: folder / video / photo tiles and rows ---------- */
+.tile.media, .tile.media.focus { box-shadow: none; }
+.tile.media .pic { position: relative; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; background: rgba(255,255,255,.07); transition: box-shadow 280ms var(--ease); }
+.k-photo .tile.media .pic { aspect-ratio: 1; }
+.tile.media.focus .pic { box-shadow: 0 18px 44px rgba(0,0,0,.65); }
+.tile.media .pic img { width: 100%; height: 100%; object-fit: cover; }
+.tile.media .noimg { position: absolute; inset: 0; }
+.tile.media .fmark { position: absolute; inset: 0; display: grid; place-items: center; }
+.tile.media.folder .pic img + .fmark { background: rgba(0,0,0,.35); }
+.tile.media .fmark svg { width: 34%; height: 34%; fill: rgba(255,255,255,.75); filter: drop-shadow(0 2px 8px rgba(0,0,0,.6)); }
+.tile.media .len { position: absolute; right: 8px; bottom: 8px; padding: 2px 8px; font-size: 18px; font-weight: 600; background: rgba(0,0,0,.7); }
+.tile.media .mcap { margin-top: 10px; font-size: 22px; line-height: 1.25; color: var(--dim); transition: color 140ms; }
+.tile.media .mcap b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile.media .mcap span { display: block; font-size: 18px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile.media.focus .mcap { color: var(--fg); }
+/* photos: no caption under each one (only the folders keep theirs), the name shows on the picked photo */
+.k-photo .tile.media.photo .mcap { position: absolute; left: 0; right: 0; bottom: 0; margin: 0; padding: 30px 10px 8px; background: linear-gradient(transparent, rgba(0,0,0,.85)); opacity: 0; transition: opacity 150ms; }
+.k-photo .tile.media.photo.focus .mcap { opacity: 1; }
+.k-photo .tile.media.folder .mcap { position: absolute; left: 0; right: 0; bottom: 0; margin: 0; padding: 30px 10px 8px; background: linear-gradient(transparent, rgba(0,0,0,.85)); color: #fff; }
+.r-media { display: flex; align-items: center; gap: 30px; }
+.r-media .pic { height: calc(100% - 16px); aspect-ratio: 16 / 9; flex: none; overflow: hidden; background: rgba(255,255,255,.07); display: grid; place-items: center; }
+.r-media.photo .pic { aspect-ratio: 1; }
+.r-media .pic img { width: 100%; height: 100%; object-fit: cover; }
+.r-media .pic svg { width: 44%; height: 44%; fill: rgba(255,255,255,.7); }
+
+/* the photo viewer */
+.photo-page { background: #000; }
+.ph-stage { position: absolute; inset: 0; overflow: hidden; }
+.ph-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; animation: 30s ease-in-out infinite alternate both; }
+.ph-err { position: absolute; left: 50%; top: 50%; translate: -50% -50%; }
+.ph-info {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 120px 96px 60px; background: linear-gradient(transparent, rgba(0,0,0,.8));
+  opacity: 0; transform: translateY(30px); transition: opacity 400ms ease, transform 500ms var(--ease); text-shadow: 0 2px 8px rgba(0,0,0,.85);
+}
+.photo-page.info .ph-info { opacity: 1; transform: none; }
+.ph-t { font-size: 56px; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ph-s { margin-top: 8px; color: rgba(255,255,255,.82); }
+.ph-hint { position: absolute; right: 96px; bottom: 66px; opacity: 0; transition: opacity 400ms; color: rgba(255,255,255,.75); text-shadow: 0 2px 8px rgba(0,0,0,.9); }
+.photo-page.info .ph-hint { opacity: 1; }
 
 /* ---------- the hidden view menu: slides in from the left, the covers step aside (app.js: Views) ---------- */
 .vdrawer {
@@ -496,7 +536,13 @@ html, body {
 .dimfocus .tile.focus .tcap { opacity: 0; }
 
 /* ---------- settings: sections (emby server · appearance · playback) ---------- */
-.set-body { position: absolute; inset: 0; padding-top: 310px; }
+.set-body { position: absolute; inset: 0; padding-top: 310px; transition: translate 480ms var(--ease); }
+/* the window the settings scroll in: rows fade out just under the tab names and at the bottom edge */
+.set-clip {
+  position: absolute; inset: 0;
+  -webkit-mask-image: linear-gradient(transparent 292px, #000 328px, #000 1030px, transparent 1080px);
+          mask-image: linear-gradient(transparent 292px, #000 328px, #000 1030px, transparent 1080px);
+}
 .opt-row {
   display: flex; align-items: center; gap: 40px; height: 104px; margin-left: 100px; color: var(--dim);
   transition: color 140ms;
@@ -632,6 +678,7 @@ html, body {
 /* ---------- settings: notes, hidden menu items ---------- */
 .set-note { margin: 30px 0 0; max-width: 1150px; font-size: 26px; line-height: 1.45; font-weight: 400; color: var(--sub); }
 .set-body > .set-note { margin-left: 100px; }
+.set-body > .set-note.side { position: absolute; left: 1120px; top: 330px; width: 700px; margin: 0; line-height: 1.7; transition: translate 480ms var(--ease); }
 .opt-row.off .lab { opacity: .5; }
 
 /* no clock over full screen playback (the "fullplay" class is set by app.js when the tv or now playing screen is up) */

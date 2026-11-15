@@ -201,6 +201,55 @@ window.Emby = (() => {
     infoCache.set(key, p);
     return p;
   }
+  /* ---------- home videos & pictures ----------
+     Libraries are found by their Emby type ("home videos & photos", "photos"); failing that, by
+     name ("home videos", "photos", "pictures"). Their folders are browsed as Emby has them. */
+  async function mediaLibs(kind) {
+    const views = (await req(`/Users/${s.userId}/Views`)).Items || [];
+    const types = kind === "photos" ? ["photos", "homevideos"] : ["homevideos"];
+    let hits = views.filter(v => types.includes(v.CollectionType));
+    if (!hits.length) {
+      const re = kind === "photos" ? /\b(photos?|pictures?)\b/i : /home\s*videos?/i;
+      hits = views.filter(v => re.test(v.Name || ""));
+    }
+    return hits.map(v => ({ id: v.Id, title: v.Name || "", isFolder: true, kind: "folder", hue: hashHue(v.Name || v.Id), emby: true }));
+  }
+  const mapMedia = i => {
+    const folder = !!i.IsFolder;
+    const when = date(i.PremiereDate) || date(i.DateCreated) || 0;
+    return {
+      id: i.Id, type: i.Type, title: i.Name || "", isFolder: folder,
+      kind: folder ? "folder" : i.MediaType === "Photo" || i.Type === "Photo" ? "photo" : "video",
+      img: img(i.Id, i.ImageTags && i.ImageTags.Primary, "Primary", 480),
+      thumb: img(i.Id, i.ImageTags && (i.ImageTags.Thumb || i.ImageTags.Primary), i.ImageTags && i.ImageTags.Thumb ? "Thumb" : "Primary", 360),
+      full: i.Type === "Photo" ? `${s.server}/emby/Items/${i.Id}/Images/Primary?maxWidth=1920&maxHeight=1080&quality=90&tag=${(i.ImageTags && i.ImageTags.Primary) || ""}&api_key=${encodeURIComponent(s.token)}` : null,
+      when, added: i.DateCreated || "", year: i.ProductionYear || (when ? new Date(when).getFullYear() : ""),
+      runtime: secs(i.RunTimeTicks), overview: i.Overview || "", count: i.ChildCount || 0,
+      resume: secs(i.UserData && i.UserData.PlaybackPositionTicks), played: !!(i.UserData && i.UserData.Played),
+      hue: hashHue(i.Name || i.Id), emby: true, home: true,
+    };
+  };
+  const mediaTypes = kind => kind === "photos" ? { IncludeItemTypes: "Photo" } : { IncludeItemTypes: "Video,Movie,Episode", MediaTypes: "Video" };
+  // what's in a folder (or library): its sub-folders and its videos / photos
+  async function folder(parentId, kind) {
+    const r = await req(`/Users/${s.userId}/Items?` + Q({
+      ParentId: parentId, Recursive: false, Fields: FIELDS + ",PremiereDate", EnableUserData: true, SortBy: "SortName",
+    }));
+    return list(r).map(mapMedia).filter(x => x.kind === "folder" || (kind === "photos" ? x.kind === "photo" : x.kind === "video"));
+  }
+  // every video / photo in these libraries (newest first when "recent")
+  async function everything(libIds, kind, recent) {
+    const out = [];
+    for (const id of libIds) {
+      const r = await req(`/Users/${s.userId}/Items?` + Q({
+        ParentId: id, Recursive: true, Fields: FIELDS + ",PremiereDate", EnableUserData: true, ...mediaTypes(kind),
+        SortBy: recent ? "DateCreated" : "SortName", SortOrder: recent ? "Descending" : "Ascending", Limit: recent ? 60 : 3000,
+      }));
+      out.push(...list(r).map(mapMedia));
+    }
+    if (recent) out.sort((a, b) => Date.parse(b.added || 0) - Date.parse(a.added || 0));
+    return recent ? out.slice(0, 60) : out;
+  }
   const mapArtist = i => {
     const a = artist(i.Id, i.Name);
     a.img = img(i.Id, i.ImageTags && i.ImageTags.Primary, "Primary", 600);
@@ -357,6 +406,7 @@ window.Emby = (() => {
     })),
     liveStream, stopStream,
     videoStream, report, artistInfo,
+    mediaLibs, folder, everything,
     lyrics,
     // either
     resume: async () => list(await req(`/Users/${s.userId}/Items/Resume?` + Q({ Limit: 12, MediaTypes: "Video", Fields: FIELDS }))).map(mapVideo),

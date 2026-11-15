@@ -469,7 +469,7 @@ function applyBg(p) {
   $bgImg.parentNode.classList.toggle("drift", !!b.drift); // the picture slowly drifts and zooms (artist pages)
   clearTimeout(bgTimer);
   // no clock over full screen playback (watching tv, music now playing)
-  $stage.classList.toggle("fullplay", p instanceof LivePage || p instanceof NowPlaying);
+  $stage.classList.toggle("fullplay", p instanceof LivePage || p instanceof NowPlaying || p instanceof PhotoPage);
   // live tv playing full screen behind the menus replaces the background picture
   Live.place(p);
   if (Live.active && Live.modeFor(p) !== "corner") { $bgImg.style.opacity = 0; return; }
@@ -617,6 +617,19 @@ const CELL = {
 const listView = (itemH, row) => (items, focus) => List({ items, itemH, row, focus });
 const albumGrid = (items, focus) => Grid({ items, cols: 7, w: 220, h: 220, cell: CELL.album, focus });
 const artistGrid = (items, focus) => Grid({ items: items.filter(a => !a.letter), cols: 7, w: 220, h: 276, gap: 30, cell: CELL.artist, focus });
+// home videos & pictures: folders, videos and photos (folders carry a folder mark; videos their length)
+const homeDate = x => x.when ? new Date(x.when).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" }).toLowerCase() : "";
+const FOLDER_ICON = `<svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>`;
+CELL.media = x => {
+  const pic = x.kind === "folder"
+    ? (x.img ? imgTag(x.img) : "") + `<span class="fmark">${FOLDER_ICON}</span>`
+    : x.thumb || x.img ? imgTag(x.kind === "photo" ? x.img : x.thumb || x.img) : `<span class="noimg"></span>`;
+  const sub = x.kind === "folder" ? (x.count ? `${x.count} item${x.count === 1 ? "" : "s"}` : "folder")
+    : [homeDate(x), x.kind === "video" && x.runtime ? fmtLong(x.runtime) : ""].filter(Boolean).join(" · ");
+  return el("div", `media ${x.kind}`, `<div class="pic">${pic}${x.kind === "video" && x.runtime ? `<span class="len">${fmt(x.runtime)}</span>` : ""}</div><div class="mcap"><b>${esc(x.title)}</b><span>${esc(sub)}</span></div>`);
+};
+ROW.media = x => el("div", `r-media ${x.kind}`, `<div class="pic">${x.kind === "folder" ? FOLDER_ICON : x.thumb || x.img ? imgTag(x.kind === "photo" ? x.img : x.thumb || x.img) : ""}</div><div class="tx"><div class="t1">${esc(x.title)}</div><div class="t2 sc">${
+  esc(x.kind === "folder" ? (x.count ? `folder · ${x.count} items` : "folder") : [homeDate(x), x.kind === "video" && x.runtime ? fmtLong(x.runtime) : "", x.played ? "watched" : x.resume > 60 ? "in progress" : ""].filter(Boolean).join(" · "))}</div></div>`);
 ROW.video = v => el("div", "r-video", `${v.img ? imgTag(v.img, "pt") : `<div class="pt none"></div>`}<div class="tx"><div class="t1">${esc(v.type === "Episode" && v.seriesName ? v.seriesName : v.title)}</div><div class="t2 sc">${
   esc([v.type === "Episode" ? `s${v.season || "?"} e${v.episode || "?"} · ${v.title}` : v.year, v.runtime ? fmtLong(v.runtime) : "", v.rating, v.score ? v.score + " ★" : ""].filter(Boolean).join(" · "))}</div></div>`);
 
@@ -645,10 +658,23 @@ const VIEW_KINDS = {
     grid: { s: { cols: 9, w: 160, h: 214, gap: 24 }, m: { cols: 7, w: 220, h: 276, gap: 30 }, l: { cols: 5, w: 290, h: 348, gap: 40 } },
     cell: CELL.artist, row: ROW.artist, rowH: { s: 80, m: 96, l: 120 },
   },
+  homevideo: {
+    layouts: [["posters", "thumbnails"], ["list", "list"]],
+    sorts: [["date:desc", "newest first"], ["date:asc", "oldest first"], ["title:asc", "name a–z"], ["title:desc", "name z–a"], ["added:desc", "recently added"]],
+    grid: { s: { cols: 6, w: 262, h: 202, gap: 22 }, m: { cols: 5, w: 318, h: 236, gap: 24 }, l: { cols: 3, w: 540, h: 362, gap: 30 } },
+    cell: CELL.media, row: ROW.media, rowH: { s: 96, m: 130, l: 180 },
+  },
+  photo: {
+    layouts: [["posters", "grid"], ["list", "list"]],
+    sorts: [["date:desc", "newest first"], ["date:asc", "oldest first"], ["title:asc", "name a–z"], ["title:desc", "name z–a"], ["added:desc", "recently added"]],
+    grid: { s: { cols: 9, w: 172, h: 172, gap: 14 }, m: { cols: 7, w: 222, h: 222, gap: 18 }, l: { cols: 5, w: 316, h: 316, gap: 22 } },
+    cell: CELL.media, row: ROW.media, rowH: { s: 96, m: 130, l: 180 },
+  },
 };
 const Views = {
   all() { try { return JSON.parse(localStorage.getItem("mc.views") || "{}"); } catch { return {}; } },
-  get(key) { return { mode: "posters", size: "m", sort: "title:asc", ...(this.all()[key] || {}) }; },
+  // (the starting sort is the first one offered: title for movies, newest first for home videos & pictures)
+  get(key, kind) { return { mode: "posters", size: "m", sort: kind ? VIEW_KINDS[kind].sorts[0][0] : "title:asc", ...(this.all()[key] || {}) }; },
   set(key, v) { const a = this.all(); a[key] = v; try { localStorage.setItem("mc.views", JSON.stringify(a)); } catch {} },
   // the items in the chosen order (only where sorting makes sense: not "recent" or "continue")
   sorted(items, views, v) {
@@ -656,8 +682,10 @@ const Views = {
     const [field, dir] = v.sort.split(":"), m = dir === "desc" ? -1 : 1;
     const name = x => String(x.sortName || x.title || x.name || "").toLowerCase();
     const val = x => field === "year" ? Number(x.year) || 0 : field === "added" ? Date.parse(x.added || "") || 0
+      : field === "date" ? x.when || Date.parse(x.added || "") || 0
       : field === "score" ? x.score || 0 : field === "artist" ? String((x.artist && x.artist.name) || "").toLowerCase() : name(x);
     return items.slice().sort((a, b) => {
+      if (views.folders && a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1; // folders stay first
       const A = val(a), B = val(b);
       const c = typeof A === "string" ? A.localeCompare(B) : A - B;
       return c * m || name(a).localeCompare(name(b));
@@ -668,7 +696,7 @@ const Views = {
     if (v.mode === "list") return List({ items, itemH: K.rowH[v.size] || K.rowH.m, row: K.row, focus });
     const g = K.grid[v.size] || K.grid.m;
     const L = Grid({ items, ...g, cell: K.cell, focus });
-    L.el.classList.add("sz-" + v.size);
+    L.el.classList.add("sz-" + v.size, "k-" + kind);
     return L;
   },
 };
@@ -682,9 +710,9 @@ function playAndShow(tracks, i) {
 
 /* ============ home ============ */
 // Hub menu: order and which items show are set in settings → hub menu. Settings always stays last.
-const MENU_ALL = ["music", "movies", "tv shows", "tv guide", "radio", "youtube", "pictures"];
+const MENU_ALL = ["music", "movies", "tv shows", "home videos", "tv guide", "radio", "youtube", "pictures"];
 // how each menu word is written (the ids stay lowercase internally; the menu shows them in capitals)
-const MENU_LABEL = { music: "Music", movies: "Movies", "tv shows": "TV Shows", "tv guide": "TV Guide", radio: "Radio", youtube: "YouTube", pictures: "Pictures", settings: "Settings" };
+const MENU_LABEL = { music: "Music", movies: "Movies", "tv shows": "TV Shows", "tv guide": "TV Guide", radio: "Radio", youtube: "YouTube", "home videos": "Home Videos", pictures: "Pictures", settings: "Settings" };
 // saved as [[id, shown], …]; items added in later versions are appended so they still appear
 function menuLayout() {
   const saved = (Prefs.get("menu") || []).filter(([id]) => MENU_ALL.includes(id));
@@ -737,8 +765,7 @@ class Home extends Page {
 
     this.qp = el("div", "quickplay"); this.pano.append(this.qp);
     this.buildQuickplay();
-    const playing = Live.active || Player.track;
-    root.append(el("div", "hint", `arrows move · enter select · ${playing ? "esc full screen player" : "esc back"} · space play/pause`));
+    this.menuScroll = undefined; // a fresh menu starts already scrolled to the picked word (no glide)
     this.paint();
     return root;
   }
@@ -773,6 +800,22 @@ class Home extends Page {
     this.rows.flat().forEach(t => t.classList.remove("focus"));
     if (this.sec === 1 && this.rows[this.qr]) this.rows[this.qr][this.qc].classList.add("focus");
     this.root.classList.toggle("qp", this.sec === 1);
+    this.scrollMenu();
+  }
+  // Too many items for the screen? The menu glides up / down so the picked word stays in view, with
+  // the next one peeking below it (Zune HD style, no scroll bar). Short menus never move.
+  scrollMenu() {
+    const menu = this.menuEls[0] && this.menuEls[0].parentNode; if (!menu) return;
+    const rowH = 114, view = 860, n = this.menuEls.length, i = Math.max(0, this.menuEls.findIndex(e => e.dataset.id === this.mid));
+    const max = Math.max(0, n * rowH - view);
+    let sc = this.menuScroll || 0;
+    if ((i + 2) * rowH > sc + view) sc = (i + 2) * rowH - view; // keep one more below
+    if ((i - 1) * rowH < sc) sc = (i - 1) * rowH;               // …and one more above
+    sc = clamp(sc, 0, max);
+    const first = this.menuScroll === undefined;
+    this.menuScroll = sc;
+    if (first) { menu.style.transition = "none"; menu.style.translate = `0 ${-sc}px`; void menu.offsetWidth; menu.style.transition = ""; }
+    else menu.style.translate = `0 ${-sc}px`;
   }
   setSec(s) {
     this.sec = s;
@@ -886,7 +929,7 @@ class PivotPage extends Page {
     if (s.data === null) return (this.list = Message("couldn't load this — " + lower(s.error)));
     if (!s.data.length) return (this.list = Message(s.empty || "nothing here yet"));
     if (s.views) { // this section has the side menu: its layout, size and order are the viewer's choice
-      const v = Views.get(s.views.key);
+      const v = Views.get(s.views.key, s.views.kind);
       s.shown = Views.sorted(s.data, s.views, v);
       this.list = Views.make(s.views.kind, v, s.shown, this.focus[s.name] || 0);
     } else {
@@ -898,7 +941,7 @@ class PivotPage extends Page {
 
   // ----- the hidden view menu (see Views) -----
   openDrawer() {
-    const s = this.sections[this.pv], K = VIEW_KINDS[s.views.kind], v = Views.get(s.views.key);
+    const s = this.sections[this.pv], K = VIEW_KINDS[s.views.kind], v = Views.get(s.views.key, s.views.kind);
     const groups = [["layout", "mode", K.layouts], ["size", "size", VIEW_SIZES]];
     if (s.views.sort) groups.push(["sort", "sort", K.sorts]);
     const d = el("div", "vdrawer");
@@ -926,14 +969,14 @@ class PivotPage extends Page {
     setTimeout(() => d.remove(), 400);
   }
   paintDrawer() {
-    const v = Views.get(this.sections[this.pv].views.key);
+    const v = Views.get(this.sections[this.pv].views.key, this.sections[this.pv].views.kind);
     this.dOpts.forEach((o, i) => {
       o.classList.toggle("focus", i === this.df);
       o.classList.toggle("on", v[o.dataset.key] === o.dataset.val);
     });
   }
   pickView(o) {
-    const s = this.sections[this.pv], v = Views.get(s.views.key);
+    const s = this.sections[this.pv], v = Views.get(s.views.key, s.views.kind);
     if (v[o.dataset.key] === o.dataset.val) return;
     v[o.dataset.key] = o.dataset.val;
     Views.set(s.views.key, v);
@@ -1395,6 +1438,114 @@ function tvPage() {
     ],
   });
 }
+/* ============ home videos & pictures ============
+   Both come from Emby libraries ("home videos & photos" / "photos"). Sections: FOLDERS (your folders
+   as Emby has them: Enter goes in, Back comes out), ALL (everything in one grid) and RECENT (newest
+   additions). The hidden ← menu sets layout, size and order, remembered separately for each. */
+function homeVideosPage() { return mediaSectionPage("home videos", "videos"); }
+function picturesPage() { return mediaSectionPage("pictures", "photos"); }
+function mediaSectionPage(title, kind) {
+  const vk = kind === "photos" ? "photo" : "homevideo";
+  let libs = null;
+  const getLibs = async () => {
+    if (!libs) libs = await Emby.mediaLibs(kind);
+    if (!libs.length) throw new Error(`there's no ${kind === "photos" ? "photos" : "home videos"} library on your emby server`);
+    return libs;
+  };
+  const opener = mediaOpener(title, kind, vk);
+  return new PivotPage({
+    title, heroName: title,
+    sections: [
+      {
+        name: "folders", open: opener, empty: "this library is empty",
+        load: async () => { const L = await getLibs(); return L.length === 1 ? Emby.folder(L[0].id, kind) : L; }, // one library: straight to its folders
+        views: { key: title, kind: vk, sort: true, folders: true },
+      },
+      { name: "all", open: opener, load: async () => Emby.everything((await getLibs()).map(l => l.id), kind), views: { key: title, kind: vk, sort: true } },
+      { name: "recent", open: opener, load: async () => Emby.everything((await getLibs()).map(l => l.id), kind, true), views: { key: title, kind: vk } },
+    ],
+  });
+}
+// what Enter does on a folder, a video or a photo
+function mediaOpener(title, kind, vk) {
+  const open = (x, i, list) => {
+    if (x.kind === "folder") {
+      return go(new PivotPage({
+        title, subtitle: x.title,
+        sections: [{ name: "folder", load: () => Emby.folder(x.id, kind), open, empty: "this folder is empty", views: { key: title, kind: vk, sort: true, folders: true } }],
+      }));
+    }
+    if (x.kind === "photo") {
+      const photos = list.filter(p => p.kind === "photo");
+      return go(new PhotoPage(photos, Math.max(0, photos.indexOf(x)), title));
+    }
+    if (x.resume > 60) return go(new VideoPage(x)); // part-watched: choose resume or from the start
+    go(new VodPage(x, 0));
+  };
+  return open;
+}
+
+/* ---------- the photo viewer ----------
+   Full screen. ← → previous / next (each photo slides in, Zune style); Enter (or play) starts and
+   stops a slideshow, where photos crossfade and slowly drift; ↑ ↓ show or hide the details. */
+class PhotoPage extends Page {
+  constructor(photos, i, section) { super(); Object.assign(this, { photos, i, section }); this.slides = false; }
+  bg() { return { opacity: 0 }; }
+  render() {
+    const r = el("div", "photo-page");
+    r.innerHTML = `<div class="ph-stage"></div>
+      <div class="ph-info"><div class="ph-t"></div><div class="ph-s sc"></div></div>
+      <div class="ph-hint sc">← → previous · next &nbsp;·&nbsp; enter slideshow &nbsp;·&nbsp; ↑ details</div>`;
+    return r;
+  }
+  q(s) { return this.el.querySelector(s); }
+  mounted() { this.show(0); this.info(true, 4000); }
+  enter() { return done(this.el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 400, easing: "ease-out" })); }
+  leave() { return done(this.el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 250, fill: "forwards" })); }
+  unmount() { clearInterval(this.timer); clearTimeout(this.infoTimer); super.unmount(); }
+  show(dir) {
+    const p = this.photos[this.i], stage = this.q(".ph-stage"), old = [...stage.children];
+    const img = el("img", "ph-img"); img.alt = "";
+    if (this.slides) img.style.animationName = "svdrift" + (1 + Math.floor(Math.random() * 3)); // slow drift during a slideshow
+    img.onload = () => {
+      if (!this.el) return;
+      if (this.slides || !dir) { // crossfade
+        img.animate([{ opacity: 0 }, { opacity: 1 }], { duration: this.slides ? 1600 : 450, easing: "ease", fill: "both" });
+        old.forEach(o => o.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 1600, fill: "forwards" }).finished.then(() => o.remove(), () => o.remove()));
+      } else { // slide: the new photo comes in from the side you moved toward, the old one leaves the other way
+        img.animate([{ opacity: 0, transform: `translateX(${dir * 14}%) scale(.96)` }, { opacity: 1, transform: "none" }], { duration: 520, easing: EASE, fill: "both" });
+        old.forEach(o => o.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: `translateX(${-dir * 14}%) scale(.96)` }], { duration: 300, easing: EASE_IN, fill: "forwards" }).finished.then(() => o.remove(), () => o.remove()));
+      }
+    };
+    img.onerror = () => { if (this.el) { old.forEach(o => o.remove()); stage.append(el("div", "ph-err sc", "this photo couldn't be shown")); } };
+    img.src = p.full || p.img;
+    stage.append(img);
+    this.q(".ph-t").textContent = p.title;
+    this.q(".ph-s").textContent = [homeDate(p), `${this.i + 1} of ${this.photos.length}`].filter(Boolean).join(" · ");
+    // load the neighbours ahead of time, so the next press is instant
+    for (const j of [this.i + 1, this.i - 1]) { const n = this.photos[(j + this.photos.length) % this.photos.length]; if (n) new Image().src = n.full || n.img; }
+  }
+  step(d) { this.i = (this.i + d + this.photos.length) % this.photos.length; this.show(d); }
+  info(on, autoHide) {
+    clearTimeout(this.infoTimer);
+    this.el.classList.toggle("info", on);
+    if (on && autoHide) this.infoTimer = setTimeout(() => this.el && this.el.classList.remove("info"), autoHide);
+  }
+  slideshow(on) {
+    this.slides = on;
+    clearInterval(this.timer);
+    toast(on ? "slideshow" : "slideshow stopped");
+    if (on) { this.info(false); this.timer = setInterval(() => this.step(1), 7000); this.step(1); }
+  }
+  playKey() { this.slideshow(!this.slides); return true; }
+  key(k) {
+    if (k === "left" || k === "right") { if (this.slides) this.slideshow(false); this.step(k === "left" ? -1 : 1); return true; }
+    if (k === "ok") { this.slideshow(!this.slides); return true; }
+    if (k === "up" || k === "down") { this.info(!this.el.classList.contains("info")); return true; }
+    return false; // Back: return to the grid
+  }
+}
+
 // a show: its seasons become the sections
 async function openShow(show) {
   let seasons;
@@ -1412,7 +1563,7 @@ async function openShow(show) {
 
 class VideoPage extends Page {
   constructor(v) { super(); this.v = v; this.f = 0; }
-  get titleKey() { return this.v.type === "Episode" ? "tv shows" : "movies"; }
+  get titleKey() { return this.v.home ? "home videos" : this.v.type === "Episode" ? "tv shows" : "movies"; }
   render() {
     const v = this.v, ep = v.type === "Episode";
     const r = el("div", "video-page" + (ep ? " ep" : ""));
@@ -2371,7 +2522,7 @@ class VodPage extends LivePage {
   fill() {
     if (!this.el) return;
     const v = this.v, ep = v.type === "Episode", pos = this.video.currentTime || 0, d = this.dur;
-    this.q(".lv-ch").textContent = ep ? (v.seriesName || "tv shows") : ["movie", v.year].filter(Boolean).join("  ");
+    this.q(".lv-ch").textContent = ep ? (v.seriesName || "tv shows") : v.home ? ["home video", homeDate(v)].filter(Boolean).join("  ") : ["movie", v.year].filter(Boolean).join("  ");
     this.q(".lv-title").textContent = v.title;
     this.q(".lv-sub").textContent = [ep ? `season ${v.season || "?"} · episode ${v.episode || "?"}` : v.rating, this.video.paused && this.info ? "paused" : ""].filter(Boolean).join(" · ");
     this.q(".lv-ov div").textContent = v.overview || "no description.";
@@ -2459,6 +2610,8 @@ function sectionPage(id) {
   if (id === "movies") return Emby.connected ? moviesPage() : needEmby(id);
   if (id === "tv shows") return Emby.connected ? tvPage() : needEmby(id);
   if (id === "tv guide") return new GuidePage();
+  if (id === "home videos") return Emby.connected ? homeVideosPage() : needEmby(id);
+  if (id === "pictures") return Emby.connected ? picturesPage() : needEmby(id);
   if (id === "radio") return radioPage();
   return new Placeholder(id);
 }
@@ -2504,17 +2657,23 @@ class SettingsPage extends Page {
     this.tab = 0; this.zone = "head"; this.f = 0; this.msg = null; this.working = false;
   }
   get titleKey() { return "settings"; }
+  // like the other sections, the giant title drifts a little as you move between tabs
+  titlePan() { return `${-this.tab * TITLE_PAN}px 0px`; }
   render() {
     const s = Emby.state;
     this.vals = this.vals || { server: s.server || "", user: s.userName || "", pw: "" };
     const r = el("div", "settings-page pivot-page");
     this.root = r;
-    r.append(el("div", "sec-title z", "settings"));
+    this.titleEl = el("div", "sec-title z", "settings");
+    this.titleEl.style.translate = this.titlePan();
+    r.append(this.titleEl);
     const clip = el("div", "pivot-clip zs");
     this.strip = el("div", "pivot-strip");
     this.tabEls = SETTINGS_TABS.map((t, i) => { const e = el("div", "pv", esc(t.name)); this.strip.append(e); return e; });
     clip.append(this.strip); r.append(clip);
-    this.body = el("div", "set-body"); r.append(this.body);
+    // the content scrolls inside a window that fades out under the tab names (no scroll bar)
+    const win = el("div", "set-clip");
+    this.body = el("div", "set-body"); win.append(this.body); r.append(win);
     this.buildTab();
     return r;
   }
@@ -2523,6 +2682,8 @@ class SettingsPage extends Page {
   // ----- building each section -----
   buildTab() {
     this.body.innerHTML = "";
+    this.bodyScroll = 0; // a new tab starts at the top
+    this.body.style.transition = "none"; this.body.style.translate = "0 0"; void this.body.offsetWidth; this.body.style.transition = "";
     this.libsEl = null;
     this.rows = []; this.statusEl = null; this.vaStatusEl = null;
     const t = SETTINGS_TABS[this.tab];
@@ -2601,7 +2762,8 @@ class SettingsPage extends Page {
       row.menuId = id; row.classList.toggle("off", !on);
       this.body.append(row); return row;
     });
-    this.body.append(el("div", "set-note t", "← → moves an item up or down the menu · enter shows or hides it · settings always stays last"));
+    // the hint sits beside the list (below it, it ran off the bottom of the screen)
+    this.body.append(el("div", "set-note side t", "← → moves an item up or down the menu<br>enter shows or hides it<br>settings always stays last"));
     return rows;
   }
   moveMenu(id, d) {
@@ -2687,11 +2849,31 @@ class SettingsPage extends Page {
     this.tabEls.forEach((e, i) => e.classList.toggle("on", i === this.tab));
     this.root.classList.toggle("head", this.zone === "head");
     (this.items || []).forEach((e, i) => e.classList.toggle("focus", this.zone === "body" && i === this.f));
+    this.scrollBody();
+  }
+  // keep the picked row in view: the page glides up when it would fall below the screen
+  scrollBody() {
+    const it = this.zone === "body" && this.items && this.items[this.f];
+    let sc = 0;
+    if (it) {
+      let top = 0;
+      for (let e = it; e && e !== this.body; e = e.offsetParent) top += e.offsetTop;
+      const bottom = top + it.offsetHeight, view = 1040, start = 330;
+      sc = this.bodyScroll || 0;
+      if (bottom + 40 > sc + view) sc = bottom + 40 - view;
+      if (top - 20 < sc + start) sc = top - 20 - start;
+      sc = Math.max(0, sc);
+    }
+    if (sc === (this.bodyScroll || 0)) return;
+    this.bodyScroll = sc;
+    this.body.style.translate = `0 ${-sc}px`;
+    this.body.querySelectorAll(".set-note.side").forEach(n => { n.style.translate = `0 ${sc}px`; }); // the side hint stays put
   }
   async switchTab(dir) {
     const n = SETTINGS_TABS.length, next = this.tab + dir;
     if (next < 0 || next >= n || this.lock) return;
     this.lock = true;
+    this.titleEl.style.translate = `${-next * TITLE_PAN}px 0px`; // the title starts drifting along with the content
     const oldEls = [...this.body.children];
     await Promise.race([slideOut(oldEls, dir, { dist: 160, dur: 170, stagger: 0 }), wait(250)]);
     if (!this.el) return;
@@ -3152,6 +3334,7 @@ const WINDOWS = {
   tvguide: "tv guide", guide: "tv guide", epg: "tv guide",
   livetv: "live", live: "live", tvchannels: "live", channels: "live",
   radio: "radio", photos: "pictures", pictures: "pictures", pics: "pictures",
+  homevideos: "home videos", homevideo: "home videos", homemovies: "home videos", videos: "home videos",
   settings: "settings", setup: "settings", youtube: "youtube",
   nowplaying: "player", fullscreen: "player", player: "player",
 };
@@ -3449,7 +3632,7 @@ const Saver = {
   eligible() {
     const p = top();
     if (!Player.playing || !Player.track || Live.active) return false;
-    if (p instanceof VodPage || p instanceof LivePage) return false;
+    if (p instanceof VodPage || p instanceof LivePage || p instanceof PhotoPage) return false;
     if (Lyrics.on && p instanceof NowPlaying && p.lyr) return false; // reading the lyrics
     if (document.activeElement && document.activeElement.tagName === "INPUT") return false;
     return !busy;

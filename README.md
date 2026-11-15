@@ -2,7 +2,7 @@
 
 A full-screen app for a Windows PC. It is meant for a TV: big type, a simple menu, and a remote or keyboard.
 
-You can play music, movies, TV shows, and live TV from your own [Emby](https://emby.media) server, plus internet radio. YouTube opens in a separate app if you want it.
+You can play music, movies, TV shows, home videos, and live TV from your own [Emby](https://emby.media) server, look through your photos, and play internet radio. YouTube opens in a separate app if you want it.
 
 ## What you need
 
@@ -44,7 +44,7 @@ Open the app with the bat file. Opening `index.html` by itself skips the helper,
 
 ## First time you open it
 
-The home screen is a list: Music, Movies, TV Shows, TV Guide, Radio, YouTube, Pictures, and Settings.
+The home screen is a list: Music, Movies, TV Shows, Home Videos, TV Guide, Radio, YouTube, Pictures, and Settings.
 
 - **Arrow keys** move
 - **Enter** selects
@@ -61,7 +61,7 @@ To use your own library:
 
 Your password is typed in only to sign in. The app does not save the password. It remembers the sign-in on this PC, in a `browser-data` folder that it creates next to the bat file. That folder stays on your computer. It is not part of this download.
 
-Until you sign in, **Music** shows a made-up sample library so you can click around. **Movies** and **TV Shows** wait until Emby is connected.
+Until you sign in, **Music** shows a made-up sample library so you can click around, and **TV Guide** shows sample channels. **Movies**, **TV Shows**, **Home Videos**, and **Pictures** wait until Emby is connected.
 
 Other setup, all under **Settings**, and all saved on this PC:
 
@@ -72,11 +72,21 @@ Other setup, all under **Settings**, and all saved on this PC:
 ## What each menu item does
 
 - **Music, Movies, TV Shows** — your Emby library. Movies and episodes can resume where you stopped.
-- **TV Guide** — the channel grid from Emby. Live TV can keep playing behind the menus, and you can watch two channels side by side.
+- **Home Videos** — home movies and other videos you keep in an Emby “home videos” library. You can browse by folder, see everything, or see the newest ones. A video you already started can resume.
+- **TV Guide** — the channel grid from Emby. Before you sign in, it shows sample channels so you can try the screen. Live TV can keep playing behind the menus, and you can watch two channels side by side.
 - **Radio** — DI.FM, RadioTunes, JazzRadio, RockRadio, Classical Radio, and ZenRadio. These need a premium listen key from those sites (player settings, then hardware player). One key covers all six.
 - **YouTube** — opens the VacuumTube app full screen. Install VacuumTube first, then set its path under **Settings**, then **Apps**.
-- **Pictures** — still a “coming soon” screen.
+- **Pictures** — photos from an Emby library named Photos or Pictures, or from a combined home-videos-and-photos library. **Folders** follows your folders. **All** shows every photo. **Recent** shows the newest ones. Enter on a photo fills the screen. Left and right move between photos. Enter starts a slideshow, about 7 seconds each. Up shows the name and date.
 - **Settings** — everything in the list above.
+
+On **Settings**, then **Hub menu**, the instructions sit to the right of the list: left and right move an item up or down, Enter shows or hides it, and Settings always stays last. New items, such as Home Videos, are added to the home menu as shown. Hide one there if you do not want it.
+
+## What's new
+
+- **Pictures** is a photo browser, with folders and a full-screen slideshow.
+- **Home Videos** is a new item on the home menu for videos you keep outside Movies and TV Shows.
+- **TV Guide** can be opened before you sign in. It uses sample channels until Emby is connected.
+- The Hub menu instructions stay on screen, to the right of the list.
 
 While something is playing, go back to the home menu and press **Back** again. That jumps to the full-screen player.
 
