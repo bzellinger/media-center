@@ -90,7 +90,7 @@ Theme.apply();
 
 /* ============ playback preferences (settings → playback) ============ */
 const Prefs = {
-  DEFAULTS: { npHide: 5, npArt: "hide", liveHide: 5, osdHide: 5, guideOk: "info", musicVol: 100, saver: 60 },
+  DEFAULTS: { npHide: 5, npArt: "hide", liveHide: 5, osdHide: 5, guideOk: "info", musicVol: 100, saver: 60, pip: "four", cc: false },
   load() { try { return { ...this.DEFAULTS, ...(JSON.parse(localStorage.getItem("mc.prefs")) || {}) }; } catch { return { ...this.DEFAULTS }; } },
   get(k) { return this.load()[k]; },
   set(k, v) { try { localStorage.setItem("mc.prefs", JSON.stringify({ ...this.load(), [k]: v })); } catch {} },
@@ -1872,18 +1872,11 @@ const Live = {
   set bgMode(v) { try { localStorage.setItem("mc.bgVideo", v); } catch {} this.place(); },
   init() {
     this.layer = el("div", "vlayer off"); this.layer.id = "vlayer";
-    this.video = el("video", "lv-video"); this.video.playsInline = true;
+    this.video = newVideo(); // (picture in picture adds more; which one is the main picture can change)
     Volume.video = this.video; Volume.apply();
-    this.video.classList.add("main");
-    Dual.video = el("video", "lv-video side"); Dual.video.playsInline = true; Dual.video.muted = true;
-    this.layer.append(this.video, Dual.video, el("div", "vl-scrim"));
+    this.layer.append(this.video, el("div", "vl-scrim"));
     $stage.insertBefore(this.layer, $pages);
     this.chip = el("div", "vchip"); $stage.append(this.chip);
-    // both pictures report in; which one is "main" can swap (picture in picture)
-    for (const v of [this.video, Dual.video]) {
-      v.addEventListener("playing", () => { if (v === this.video) { this.setStatus(""); emitLive("playing"); } else Dual.status(""); });
-      v.addEventListener("waiting", () => { if (v === this.video) this.setStatus("buffering…"); else Dual.status("buffering…"); });
-    }
   },
   modeFor(p) { return !this.active ? "off" : p instanceof LivePage ? "full" : this.bgMode; },
   place(p = top()) {
@@ -1914,7 +1907,7 @@ const Live = {
     try { info = await Emby.liveStream(ch.id); }
     catch (e) { if (gen === this.gen) this.setStatus("couldn't tune this channel — " + lower(e.message)); return; }
     if (gen !== this.gen || !this.active) { Emby.stopStream(info); return; } // flipped or stopped meanwhile
-    this.stream = info;
+    this.stream = info; this.light = false;
     this.hls = playStream(this.video, info);
   },
   release() {
@@ -1943,7 +1936,10 @@ function emitLive(evt) { const p = top(); if (p && p.el && p.live) p.live(evt); 
 // Starts an Emby live stream in a <video>. Problems are reported to whichever picture the stream
 // belongs to at that moment (the main one and the picture-in-picture one can trade places).
 function playStream(v, info) {
-  const report = (hls, text) => { if (hls && hls === Live.hls) Live.setStatus(text); else if (hls && hls === Dual.hls) Dual.status(text); };
+  const report = (hls, text) => {
+    if (hls && hls === Live.hls) return Live.setStatus(text);
+    const p = Dual.smalls.find(x => x.hls === hls); if (p) Dual.status(p, text);
+  };
   if (window.Hls && Hls.isSupported()) {
     let recovered = false;
     const hls = new Hls({
@@ -1962,29 +1958,139 @@ function playStream(v, info) {
     return hls;
   }
   if (v.canPlayType("application/vnd.apple.mpegurl")) { v.src = info.url; v.play().catch(() => {}); return null; }
-  if (v === Live.video) Live.setStatus("this browser can't play live tv streams"); else Dual.status("this browser can't play live tv streams");
+  if (v === Live.video) Live.setStatus("this browser can't play live tv streams");
+  else { const p = Dual.smalls.find(x => x.video === v); if (p) Dual.status(p, "this browser can't play live tv streams"); }
   return null;
 }
 
-/* ============ picture in picture (two channels side by side) ============
-   Like the old Zune hub: the pip button in the player controls (or "add <channel>" by voice) moves
-   the picture to the right half and lists the channels on the left; pick one and it plays there.
-   - ← / → choose which side you hear (it gets a frame)
-   - Enter or Back: keep the side you're hearing full screen; the other one closes
-   - next / previous change the channel on the side you're hearing */
+/* ============ picture in picture: one big picture + up to three small ones ============
+   The pip button in the player controls (or "add <channel>" by voice) shrinks the picture into the
+   big spot on the left and opens the channel list; the pick plays in a small window on the right.
+   - arrows move a white frame between the pictures; you hear the framed one
+   - Enter: a small picture swaps into the big spot · the big one goes back to full screen alone
+     · the empty "+ add" spot opens the channel list again
+   - Back closes the framed picture (the others close up the gap); next / previous change its channel
+   Kept smooth: every picture is a full-size video that is only ever moved and scaled (cheap for the
+   graphics card), and moving a picture never restarts its stream.
+   Every picture asks Emby for the same stream as normal tv. Asking for a smaller one for the little
+   windows forced Emby to convert channels it otherwise just passes along (H.264 from Frndly / Philo),
+   which made a third and fourth picture overload it; Edge shrinks the pictures itself instead. */
+const PIP_LIGHT = false; // (the reduced-stream machinery stays, switched off)
+// Two looks (settings → playback → picture in picture):
+// "four": one big picture on the left (1440×810) + up to three small ones stacked on the right (480×270)
+// "two":  the old Zune hub's side by side — the channel you were watching on the right half, the added one on the left
+const SLOTS = {
+  four: [
+    { x: 0, y: 135, s: 0.75 },                                                                  // big
+    { x: 1440, y: 135, s: 0.25 }, { x: 1440, y: 405, s: 0.25 }, { x: 1440, y: 675, s: 0.25 }, // small
+  ],
+  two: [{ x: 960, y: 270, s: 0.5 }, { x: 0, y: 270, s: 0.5 }],
+};
+const slotOf = k => (SLOTS[Dual.look] || SLOTS.four)[k];
+const slotBox = k => { const s = slotOf(k); return { x: s.x, y: s.y, w: 1920 * s.s, h: 1080 * s.s }; };
+// the big picture, read and written straight through to the live tv engine
+const MAIN = {
+  get i() { return Live.i; }, set i(v) { Live.i = v; },
+  get video() { return Live.video; }, set video(v) { Live.video = v; Volume.video = v; Volume.apply(); },
+  get hls() { return Live.hls; }, set hls(v) { Live.hls = v; },
+  get stream() { return Live.stream; }, set stream(v) { Live.stream = v; },
+  get light() { return !!Live.light; }, set light(v) { Live.light = v; },
+  get status() { return Live.statusText; }, set status(v) { Live.statusText = v; },
+  gen: 0, main: true,
+};
+function newVideo() {
+  const v = el("video", "lv-video"); v.playsInline = true;
+  v.addEventListener("playing", () => {
+    if (v === Live.video) { Live.setStatus(""); emitLive("playing"); }
+    const p = Dual.smalls.find(x => x.video === v); if (p) Dual.status(p, "");
+  });
+  v.addEventListener("waiting", () => {
+    if (v === Live.video) Live.setStatus("buffering…");
+    const p = Dual.smalls.find(x => x.video === v); if (p) Dual.status(p, "buffering…");
+  });
+  return v;
+}
 const Dual = {
-  on: false, mode: null, i: -1, audio: "main", gen: 0, hls: null, stream: null, video: null, list: null, statusText: "",
+  on: false, mode: null, smalls: [], f: 0, audio: 0, list: null, upTimer: null,
+  pending: new Set(), // quality changes still waiting for their first picture
+  dropPending() { this.pending.forEach(d => d()); this.pending.clear(); },
   get chans() { return (Live.guide && Live.guide.channels) || []; },
-  get ch() { return this.chans[this.i] || null; },
+  pics() { return [MAIN, ...this.smalls]; },
   page() { const p = top(); return p instanceof LivePage && p.el ? p : null; },
   box() { const p = this.page(); return p ? p.q(".lv-dual") : null; },
+  showing(i) { return this.pics().findIndex(p => p.i === i); },
+  look: "four",
+  get two() { return this.look === "two"; },
+  get maxSmall() { return SLOTS[this.look].length - 1; },
+  addSlot() { return this.smalls.length < this.maxSmall ? this.smalls.length + 1 : -1; }, // the "+ add" spot's number, or -1 when all are used
+
+  // ----- arranging -----
+  place(v, k, instant) {
+    const s = slotOf(k), t = `translate(${s.x}px, ${s.y}px) scale(${s.s})`;
+    if (instant) { v.style.transition = "none"; v.style.transform = t; void v.offsetWidth; v.style.transition = ""; }
+    else v.style.transform = t;
+  },
+  layout() {
+    if (!this.on) return;
+    this.place(MAIN.video, 0);
+    this.smalls.forEach((p, k) => this.place(p.video, k + 1));
+    this.overlay();
+  },
+  // frame, labels and the "+ add" spot, drawn over the pictures (never scaled, so always crisp)
+  overlay() {
+    const box = this.box(); if (!box || !this.on) return;
+    let ov = box.querySelector(".mv"); if (!ov) { ov = el("div", "mv", `<div class="mv-frame"></div>`); box.append(ov); }
+    ov.querySelectorAll(".mv-tag, .mv-add").forEach(e => e.remove());
+    this.pics().forEach((p, k) => {
+      const b = slotBox(k), ch = this.chans[p.i];
+      const tag = el("div", "mv-tag" + (slotOf(k).s < 0.4 ? " small" : ""), `${this.audio === k ? "♪ " : ""}<b>${esc(ch ? ch.number : "")}</b> ${esc(ch ? ch.name : "")}${p.status ? ` · ${esc(p.status)}` : ""}`);
+      Object.assign(tag.style, { left: b.x + "px", top: b.y + b.h - (k ? 40 : 56) + "px", width: b.w + "px" });
+      ov.append(tag);
+    });
+    const a = this.addSlot();
+    if (a > 0 && this.mode !== "pick") {
+      const b = slotBox(a), add = el("div", "mv-add sc", "+ add a channel");
+      Object.assign(add.style, { left: b.x + "px", top: b.y + "px", width: b.w + "px", height: b.h + "px" });
+      ov.append(add);
+    }
+    const fr = ov.querySelector(".mv-frame"), fb = slotBox(Math.min(this.f, this.maxSmall));
+    Object.assign(fr.style, { transform: `translate(${fb.x}px, ${fb.y}px)`, width: fb.w + "px", height: fb.h + "px" });
+    fr.classList.toggle("on", this.mode === "play");
+  },
+  hint(text) {
+    const box = this.box(); if (!box) return;
+    let h = box.querySelector(".lv-dhint"); if (!h) { h = el("div", "lv-dhint sc"); box.append(h); }
+    h.textContent = text;
+    h.getAnimations().forEach(a => a.cancel());
+    h.animate([{ opacity: 0 }, { opacity: 1, offset: .08 }, { opacity: 1, offset: .85 }, { opacity: 0 }], { duration: 6000, fill: "forwards" });
+  },
+  setAudio(k) {
+    this.audio = clamp(k, 0, this.smalls.length);
+    this.pics().forEach((p, j) => { p.video.muted = j !== this.audio; if (j) p.video.volume = MAIN.video.volume; });
+    this.overlay();
+  },
+  status(p, text) { if (p === MAIN) Live.setStatus(text); else p.status = text; this.overlay(); },
+
+  // ----- adding a channel -----
+  // the picture shrinks into the big spot and the channel list opens over it
   pick(focus) {
-    if (this.on || !Live.active || !this.page()) return false;
+    if (this.mode === "pick" || !Live.active || !this.page()) return false;
     if (this.chans.length < 2) { toast("there's only one channel"); return false; }
-    this.on = true; this.mode = "pick"; this.audio = "main";
-    Live.layer.classList.add("dual"); // the picture glides over to the right half
+    if (this.addSlot() < 0) { toast(this.two ? "side by side shows two channels — pick a side with enter first" : "all four pictures are in use — close one with back first"); return false; }
+    if (!this.on) {
+      this.look = Prefs.get("pip") === "two" ? "two" : "four"; // the look is chosen when picture in picture starts
+      this.on = true; this.f = 0; this.audio = 0;
+      MAIN.video.muted = false;
+      Live.layer.classList.add("multi");
+      this.place(MAIN.video, 0);
+    }
+    this.mode = "pick";
+    this.f = this.addSlot();
     const n = this.chans.length;
-    this.renderPick(focus != null ? focus : (Live.i + 1) % n);
+    let start = focus != null ? focus : (MAIN.i + 1) % n, guard = 0;
+    while (focus == null && this.showing(start) >= 0 && guard++ < n) start = (start + 1) % n;
+    this.renderPick(start);
+    this.overlay();
     this.hint("↑ ↓ choose a channel · enter adds it · back cancels");
     return true;
   },
@@ -1994,153 +2100,263 @@ const Dual = {
     const row = (ch, i) => {
       const p = g && g.progs && g.progs.has(ch.id) ? g.progAt(ch, now) : null;
       const on = p && p.start <= now && p.end > now ? p.title : "";
-      return el("div", "r-dual" + (i === Live.i ? " main" : ""),
-        `<span class="n">${esc(ch.number)}</span><div class="tx"><div class="t1 caps">${esc(ch.name)}</div><div class="t2 sc">${i === Live.i ? "watching on the right" : esc(on)}</div></div>`);
+      const shown = this.showing(i) >= 0;
+      return el("div", "r-dual" + (shown ? " main" : ""),
+        `<span class="n">${esc(ch.number)}</span><div class="tx"><div class="t1 caps">${esc(ch.name)}</div><div class="t2 sc">${shown ? "already showing" : esc(on)}</div></div>`);
     };
-    this.list = List({ items: this.chans, itemH: 96, height: 768, row, focus });
+    this.list = List({ items: this.chans, itemH: 96, height: 672, row, focus });
     const pickEl = el("div", "lv-pick");
-    pickEl.append(el("div", "lv-pick-h sc", "picture in picture"), this.list.el);
+    pickEl.append(el("div", "lv-pick-h sc", "add a channel"), this.list.el);
     box.querySelector(".lv-pick")?.remove();
-    box.prepend(pickEl);
+    box.append(pickEl);
     slideIn([pickEl], -1, { dist: 120, dur: 420 });
   },
-  choose(i) {
-    if (i === Live.i) { toast("pick a different channel"); return false; }
-    this.mode = "play"; this.i = i;
-    const box = this.box(), pickEl = box && box.querySelector(".lv-pick");
+  closePick() {
+    const pickEl = this.box()?.querySelector(".lv-pick");
     if (pickEl) slideOut([pickEl], -1, { dist: 120, dur: 240 }).then(() => pickEl.remove());
-    Live.layer.classList.add("dual-play");
-    this.setAudio("main");
-    this.tune(i);
-    this.hint("← → choose the sound · enter keeps that side full screen");
+  },
+  choose(i) {
+    if (this.showing(i) >= 0) { toast("that channel is already showing"); return false; }
+    const k = this.addSlot(); if (k < 0) return false;
+    this.closePick();
+    this.mode = "play";
+    const p = { i, video: newVideo(), hls: null, stream: null, light: PIP_LIGHT && !this.two, status: "", gen: 0 };
+    p.video.muted = true;
+    p.video.style.opacity = 0; // fades in once its picture actually arrives
+    this.place(p.video, k, true);
+    Live.layer.insertBefore(p.video, Live.layer.querySelector(".vl-scrim"));
+    this.smalls.push(p);
+    this.f = 0;
+    this.layout();
+    this.open(p, PIP_LIGHT && !this.two);
+    this.hint(this.two ? "← → choose the sound · enter or back keeps that side full screen"
+      : "arrows pick a picture (you hear the framed one) · enter swaps it into the big spot · back closes it");
     return true;
   },
-  async tune(i) {
-    this.i = i;
-    this.releaseSide(); // (this also cancels a tune that's still on its way)
-    const gen = this.gen, ch = this.ch;
-    this.status(`tuning ${ch.number} ${ch.name}…`);
+  // start (or restart) a small picture's channel
+  async open(p, light) {
+    const gen = ++p.gen, ch = this.chans[p.i];
+    if (p.hls) { p.hls.destroy(); p.hls = null; }
+    if (p.stream) { Emby.stopStream(p.stream); p.stream = null; }
+    this.status(p, `tuning ${ch.number} ${ch.name}…`);
     let info;
-    try { info = await Emby.liveStream(ch.id); }
-    catch (e) { if (gen === this.gen) this.status("couldn't tune — " + lower(e.message)); return; }
-    if (gen !== this.gen || this.mode !== "play") { Emby.stopStream(info); return; }
-    this.stream = info;
-    this.hls = playStream(this.video, info);
-    this.setAudio(this.audio);
+    try { info = await Emby.liveStream(ch.id, { light }); }
+    catch (e) { if (gen === p.gen) this.status(p, /tuner/i.test(e.message) ? "no free tuner" : "couldn't tune — " + lower(e.message)); return; }
+    if (gen !== p.gen || !this.smalls.includes(p)) { Emby.stopStream(info); return; }
+    p.stream = info; p.light = light;
+    p.hls = playStream(p.video, info);
+    p.video.addEventListener("playing", () => { p.video.style.opacity = 1; }, { once: true });
   },
-  setAudio(which) {
-    this.audio = which;
-    Live.video.muted = which !== "main";
-    this.video.muted = which !== "side";
-    this.video.volume = Live.video.volume;
-    Live.video.classList.toggle("aud", which === "main");
-    this.video.classList.toggle("aud", which === "side");
-    this.tags();
+  // quietly change a picture's stream quality (full for the big spot, light for small ones): the new
+  // stream plays in a hidden copy at the same place and takes over the moment it has a picture
+  async requality(p, light) {
+    if (p.light === light || !Live.active) return;
+    const gen = ++p.gen, ch = this.chans[p.i];
+    if (!ch) return;
+    let info;
+    try { info = await Emby.liveStream(ch.id, { light }); } catch { return; }
+    const still = () => gen === p.gen && Live.active && (p === MAIN || this.smalls.includes(p));
+    if (!still()) { Emby.stopStream(info); return; }
+    const v = newVideo(), oldV = p.video;
+    v.muted = oldV.muted; v.volume = oldV.volume; v.style.opacity = 0; v.style.transform = oldV.style.transform;
+    Live.layer.insertBefore(v, oldV.nextSibling);
+    const hls = playStream(v, info);
+    let settled = false;
+    const drop = () => { if (settled) return; settled = true; if (hls) hls.destroy(); Emby.stopStream(info); v.pause(); v.remove(); };
+    this.pending.add(drop);
+    setTimeout(() => { drop(); this.pending.delete(drop); }, 20000); // never got going: forget it, the old stream carries on
+    v.addEventListener("playing", () => {
+      this.pending.delete(drop);
+      if (settled) return;
+      if (!still() || p.video !== oldV) return drop();
+      settled = true;
+      // take the picture's place as it is NOW (it may have moved, e.g. back to full screen, since this copy started)
+      v.style.transition = "none"; v.style.transform = oldV.style.transform; void v.offsetWidth;
+      v.style.transition = ""; v.style.opacity = 1; // (normal motion from here, so a move during the hand-over still glides)
+      const old = { hls: p.hls, stream: p.stream };
+      p.video = v; p.hls = hls; p.stream = info; p.light = light;
+      setTimeout(() => { v.style.transition = ""; if (old.hls) old.hls.destroy(); if (old.stream) Emby.stopStream(old.stream); oldV.pause(); oldV.remove(); }, 450);
+    }, { once: true });
   },
-  status(t) { this.statusText = t; this.tags(); },
-  // small labels over each half: channel, and ♪ on the one you're hearing
-  tags() {
-    const box = this.box(); if (!box) return;
-    let tg = box.querySelector(".lv-tags");
-    if (this.mode !== "play") { if (tg) tg.remove(); return; }
-    if (!tg) { tg = el("div", "lv-tags", `<div class="lv-tag l"></div><div class="lv-tag r"></div>`); box.append(tg); }
-    const m = Live.ch, s = this.ch;
-    tg.querySelector(".l").innerHTML = s ? `${this.audio === "side" ? "♪ " : ""}<b>${esc(s.number)}</b> ${esc(s.name)}${this.statusText ? ` · ${esc(this.statusText)}` : ""}` : "";
-    tg.querySelector(".r").innerHTML = m ? `${this.audio === "main" ? "♪ " : ""}<b>${esc(m.number)}</b> ${esc(m.name)}` : "";
+
+  // ----- changing places -----
+  // a small picture and the big one trade places — both keep playing, nothing restarts
+  swap(k) {
+    const p = this.smalls[k - 1]; if (!p) return;
+    const m = { i: MAIN.i, video: MAIN.video, hls: MAIN.hls, stream: MAIN.stream, light: MAIN.light, status: MAIN.status };
+    MAIN.i = p.i; MAIN.video = p.video; MAIN.hls = p.hls; MAIN.stream = p.stream; MAIN.light = p.light; MAIN.status = p.status;
+    Object.assign(p, m); p.gen++;
+    MAIN.gen++; Live.gen++;
+    const pg = this.page(); if (pg) pg.i = MAIN.i;
+    if (this.audio === k) this.audio = 0; else if (this.audio === 0) this.audio = k;
+    this.f = 0;
+    this.layout(); this.setAudio(this.audio);
+    Live.updateChip();
+    // after it settles: the big one gets full quality, the one now small a light stream
+    clearTimeout(this.upTimer);
+    this.upTimer = setTimeout(() => { if (!this.on) return; this.requality(MAIN, false); this.smalls.forEach(s => this.requality(s, PIP_LIGHT && !this.two)); }, 1500);
   },
-  hint(text) {
-    const box = this.box(); if (!box) return;
-    let h = box.querySelector(".lv-dhint");
-    if (!h) { h = el("div", "lv-dhint sc"); box.append(h); }
-    h.textContent = text;
-    h.getAnimations().forEach(a => a.cancel());
-    h.animate([{ opacity: 0 }, { opacity: 1, offset: .08 }, { opacity: 1, offset: .85 }, { opacity: 0 }], { duration: 5000, fill: "forwards" });
+  // close one picture; closing the big one moves the first small one up into its place
+  remove(k) {
+    if (k === 0) {
+      if (!this.smalls.length) return this.exit();
+      this.swap(1);
+      k = 1;
+    }
+    const p = this.smalls[k - 1]; if (!p) return;
+    p.gen++;
+    this.smalls.splice(k - 1, 1);
+    p.video.style.opacity = 0;
+    setTimeout(() => { if (p.hls) p.hls.destroy(); if (p.stream) Emby.stopStream(p.stream); p.video.pause(); p.video.remove(); }, 450);
+    if (!this.smalls.length) return this.exit();
+    this.f = Math.min(this.f, this.smalls.length);
+    this.setAudio(this.audio === k ? 0 : this.audio > k ? this.audio - 1 : this.audio);
+    this.layout();
   },
-  // leave picture in picture, keeping one side full screen ("main" = the right, "side" = the left)
-  exit(keep = "main") {
+  // back to one picture: the big one (or the one numbered keep) fills the screen again
+  exit(keep = 0) {
     if (!this.on || this.mode === "leaving") return;
-    if (this.mode === "pick") return this.cancel();
-    if (keep === "side" && !this.stream) keep = "main"; // the left one never got going
+    if (keep > 0) this.swap(keep);
     this.mode = "leaving";
-    const layer = Live.layer;
-    layer.classList.remove("dual-play");
-    if (keep === "side") layer.classList.add("keep-side");
-    else layer.classList.remove("dual"); // the right side widens back, the left fades away
-    this.box()?.querySelector(".lv-tags")?.remove();
-    setTimeout(() => {
-      if (keep === "side") this.swap();
-      this.finish();
-    }, 440);
-  },
-  cancel() {
-    const box = this.box(), pickEl = box && box.querySelector(".lv-pick");
-    this.mode = "leaving";
-    Live.layer.classList.remove("dual");
-    if (pickEl) slideOut([pickEl], -1, { dist: 120, dur: 260 }).then(() => pickEl.remove());
-    setTimeout(() => this.finish(), 300);
-  },
-  // the left picture becomes the main one without restarting it (the two players trade places)
-  swap() {
-    const a = Live.video, b = this.video;
-    [Live.hls, this.hls] = [this.hls, Live.hls];
-    [Live.stream, this.stream] = [this.stream, Live.stream];
-    Live.video = b; this.video = a;
-    b.classList.replace("side", "main"); a.classList.replace("main", "side");
-    Volume.video = b; b.muted = false; Volume.apply();
-    Live.i = this.i;
-    const p = this.page(); if (p) p.i = this.i;
+    this.closePick();
+    for (const p of this.smalls) {
+      p.gen++; p.video.style.opacity = 0;
+      setTimeout(() => { if (p.hls) p.hls.destroy(); if (p.stream) Emby.stopStream(p.stream); p.video.pause(); p.video.remove(); }, 450);
+    }
+    this.smalls = [];
+    MAIN.video.muted = false;
+    MAIN.video.style.transform = ""; // glides back to full screen
+    Live.layer.classList.remove("multi");
+    this.box()?.querySelector(".mv")?.remove();
+    setTimeout(() => this.finish(), 460);
+    if (MAIN.light) setTimeout(() => this.requality(MAIN, false), 700); // full quality again
   },
   finish(quiet) {
-    this.releaseSide();
-    Live.layer.classList.remove("dual", "dual-play", "keep-side");
-    Live.video.muted = false; Live.video.classList.remove("aud"); this.video.classList.remove("aud");
-    this.on = false; this.mode = null; this.i = -1; this.list = null; this.statusText = "";
+    clearTimeout(this.upTimer);
+    if (!Live.active) this.dropPending();
+    this.on = false; this.mode = null; this.list = null; this.f = 0; this.audio = 0;
     const box = this.box(); if (box) box.innerHTML = "";
     const p = this.page(); if (p && !quiet) { p.fill(); p.banner(); }
     Live.updateChip();
   },
-  releaseSide() {
-    this.gen++;
-    if (this.hls) { this.hls.destroy(); this.hls = null; }
-    const v = this.video; v.pause(); v.removeAttribute("src"); v.srcObject = null; v.load();
-    if (this.stream) { Emby.stopStream(this.stream); this.stream = null; }
-  },
-  // straight away, no animation (tv stopped, or the player screen left)
+  // straight away, no animation (tv stopped, or the player screen left): keep the big one
   close() {
-    if (!this.on) return;
-    this.mode = "leaving";
+    this.dropPending();
+    if (!this.on) { if (MAIN.light && Live.active) setTimeout(() => this.requality(MAIN, false), 300); return; }
+    for (const p of this.smalls) { p.gen++; if (p.hls) p.hls.destroy(); if (p.stream) Emby.stopStream(p.stream); p.video.pause(); p.video.remove(); }
+    this.smalls = [];
+    const v = MAIN.video;
+    v.muted = false; v.style.transition = "none"; v.style.transform = ""; void v.offsetWidth; v.style.transition = "";
+    Live.layer.classList.remove("multi");
     this.finish(true);
+    if (MAIN.light && Live.active) setTimeout(() => this.requality(MAIN, false), 300);
+  },
+
+  // ----- keys -----
+  move(k) {
+    const n = this.pics().length, add = this.addSlot();
+    const last = add > 0 ? add : n - 1;
+    if (k === "left") this.f = 0;
+    else if (k === "right") this.f = this.f === 0 ? 1 : this.f;
+    else if (k === "up") this.f = this.f > 1 ? this.f - 1 : this.f;
+    else if (k === "down") this.f = this.f >= 1 && this.f < last ? this.f + 1 : this.f;
+    if (this.f > last) this.f = last;
+    if (this.f < n) this.setAudio(this.f); else this.overlay(); // the "+ add" spot has no sound of its own
   },
   key(k) {
     if (this.mode === "pick") {
       if (k === "up" || k === "down") this.list.move(k === "up" ? -1 : 1);
       else if (k === "ok") this.choose(this.list.index);
-      else if (k === "back") this.cancel();
+      else if (k === "back") { this.closePick(); if (!this.smalls.length) this.exit(); else { this.mode = "play"; this.f = 0; this.overlay(); } }
       return true;
     }
-    if (this.mode === "play") {
-      if (k === "left" || k === "right") this.setAudio(k === "left" ? "side" : "main");
-      else if (k === "ok" || k === "back") this.exit(this.audio);
+    if (this.mode !== "play") return true; // mid-animation
+    if (this.two) { // the old Zune hub's way: ← → pick the side you hear, Enter or Back keeps that side full screen
+      if (k === "left" || k === "right") { this.f = k === "left" ? 1 : 0; this.setAudio(this.f); }
+      else if (k === "ok" || k === "back") this.exit(this.f);
       return true;
     }
-    return true; // mid-animation
+    if (["left", "right", "up", "down"].includes(k)) { this.move(k); return true; }
+    const n = this.pics().length;
+    if (k === "ok") {
+      if (this.f >= n) this.pick();          // the "+ add" spot
+      else if (this.f === 0) this.exit();    // the big one alone, full screen
+      else this.swap(this.f);                // a small one into the big spot
+      return true;
+    }
+    if (k === "back") { if (this.f < n) this.remove(this.f); else { this.f = 0; this.overlay(); } return true; }
+    return true;
   },
-  // next / previous: change the channel on the side you're hearing
+  // next / previous: change the channel of the framed picture
   mediaKey(k, page) {
     if (k === "stop") return false;
     if (this.mode !== "play") return true;
-    const n = this.chans.length, d = k === "next" ? 1 : -1;
-    if (this.audio === "side") {
-      let j = (this.i + d + n) % n; if (j === Live.i) j = (j + d + n) % n;
-      this.tune(j);
-    } else {
-      let j = (Live.i + d + n) % n; if (j === this.i) j = (j + d + n) % n;
-      page.i = j; page.chnum(page.ch.number); Live.tune(Live.guide, j);
-    }
-    this.tags();
+    const n = this.chans.length, d = k === "next" ? 1 : -1, pics = this.pics();
+    const p = pics[Math.min(this.f, pics.length - 1)];
+    let j = (p.i + d + n) % n, guard = 0;
+    while (this.showing(j) >= 0 && guard++ < n) j = (j + d + n) % n;
+    if (p === MAIN) { page.i = j; page.chnum(this.chans[j].number); Live.light = false; Live.tune(Live.guide, j); }
+    else { p.i = j; p.video.style.opacity = 0; this.open(p, PIP_LIGHT && !this.two); }
+    this.overlay();
     return true;
   },
 };
+// (voice) find a channel by number or name in the channel list the tv is using
+function dualChannelIndex(q) {
+  const chans = (Live.guide && Live.guide.channels) || [];
+  const ch = chans.find(c => c.number && norm(c.number) === norm(q)) || bestMatch(chans, q, c => c.name);
+  return ch ? chans.indexOf(ch) : -1;
+}
+
+/* ============ closed captions on live tv ============
+   TV channels carry captions inside the video (the standard 608 kind; tested on OTA, Frndly and Philo
+   through Emby). The video player reads them into a caption track; this shows them in the app's own
+   style, low on the picture, stepping up above the player controls while those are showing. They follow
+   the picture you're hearing (picture in picture), and the on / off choice is remembered. */
+const CC = {
+  get on() { return !!Prefs.get("cc"); },
+  set(on) {
+    Prefs.set("cc", !!on); this.render();
+    const p = top(); if (p instanceof LivePage && p.el && p.mode !== "hidden") p.fill();
+  },
+  video: null, track: null,
+  source() { // the picture whose captions to show
+    if (!Live.active) return null;
+    if (Dual.on) { const p = Dual.pics()[Dual.audio]; return p ? p.video : null; }
+    return Live.video;
+  },
+  tick() {
+    const v = this.source();
+    if (v !== this.video) { if (this.track) this.track.oncuechange = null; this.video = v; this.track = null; }
+    if (v && !this.track) {
+      const tracks = [...v.textTracks].filter(t => t.kind === "captions" || t.kind === "subtitles");
+      const t = tracks.find(t => /cc1|english|\ben\b/i.test(`${t.label} ${t.language}`)) || tracks[0];
+      if (t) { this.track = t; t.oncuechange = () => this.render(); }
+    }
+    // read the captions ourselves; the browser's own drawing stays off
+    if (v) [...v.textTracks].forEach(t => { if (t.mode !== "hidden") t.mode = "hidden"; });
+    this.render();
+  },
+  render() {
+    const p = top(), box = p instanceof LivePage && !(p instanceof VodPage) && p.el ? p.q(".lv-cc") : null;
+    if (!box) return;
+    const cues = this.on && this.track && this.track.activeCues ? [...this.track.activeCues] : [];
+    const text = cues.map(c => String(c.text || "").replace(/<[^>]+>/g, "")).join("\n").trim();
+    if (box.dataset.text !== text) {
+      box.dataset.text = text;
+      box.innerHTML = text ? text.split("\n").filter(l => l.trim()).map(l => `<span>${esc(l.trim())}</span>`).join("<br>") : "";
+    }
+    box.classList.toggle("on", !!text);
+    if (Dual.on) { // picture in picture: under the picture you're hearing
+      const k = Math.min(Dual.audio, Dual.maxSmall), b = slotBox(k), small = slotOf(k).s < 0.4;
+      Object.assign(box.style, { left: b.x + "px", width: b.w + "px", bottom: (1080 - b.y - b.h + (small ? 44 : 70)) + "px" });
+      box.classList.toggle("small", small);
+    } else if (box.style.left) {
+      box.style.left = box.style.width = box.style.bottom = ""; box.classList.remove("small");
+    }
+  },
+};
+setInterval(() => { if (top() instanceof LivePage && !(top() instanceof VodPage)) CC.tick(); }, 400);
 
 /* ============ watching live tv (full screen) ============
    Player controls work like Kodi's on-screen display, in the Zune style:
@@ -2158,6 +2374,7 @@ const PLAYER_BUTTONS = [
   ["chup", "ch +", `<svg viewBox="0 0 24 24"><path d="M7.4 15.4 12 10.8l4.6 4.6L18 14l-6-6-6 6z"/></svg>`],
   ["stop", "stop", `<svg viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>`],
   ["info", "info", `<svg viewBox="0 0 24 24"><path d="M11 10h2v7h-2zm0-3h2v2h-2z"/></svg>`],
+  ["cc", "captions", `<svg viewBox="0 0 24 24"><path d="M3 5h18v14H3zm2 2v10h14V7zm2.5 2.5h3v1.3h-1.7v2.4h1.7v1.3h-3zm5 0h3v1.3h-1.7v2.4h1.7v1.3h-3z"/></svg>`], // closed captions on / off
   ["dual", "pip", `<svg viewBox="0 0 24 24"><path d="M2 6h9v12H2zm11 0h9v12h-9zM4 8v8h5V8z"/></svg>`], // picture in picture
 ];
 const PLAY_BTN = PLAYER_BUTTONS.findIndex(b => b[0] === "play");
@@ -2168,7 +2385,7 @@ class LivePage extends Page {
   bg() { return { opacity: 0 }; }
   render() {
     const r = el("div", "live-page");
-    r.innerHTML = `<div class="lv-status"></div><div class="lv-dual"></div>
+    r.innerHTML = `<div class="lv-status"></div><div class="lv-dual"></div><div class="lv-cc"></div>
       <div class="lv-glyph"></div><div class="lv-chnum"></div>
       <div class="lv-peek"><div class="lv-peek-txt sc"></div><div class="lv-bar"><i></i></div></div>
       <div class="lv-osd">
@@ -2209,7 +2426,7 @@ class LivePage extends Page {
   live(evt) {
     if (evt === "stop") { if (top() === this) back(); return; } // tv stopped (stop button, voice, youtube…): leave the empty screen
     if (evt === "status") { this.status(Dual.on ? "" : Live.statusText); if (!this.swapping) this.fill(); }
-    if (Dual.on) { Dual.tags(); return; } // two pictures: no banner over them
+    if (Dual.on) { Dual.overlay(); return; } // several pictures: no banner over them
     if (this.swapping) return; // a channel change is mid-slide; it fills in the new info itself
     // The channel banner shows once, when you pick the channel. When the picture actually starts
     // (after buffering) it isn't shown again; if it's still up, its countdown restarts so you get
@@ -2258,6 +2475,8 @@ class LivePage extends Page {
     const paused = Live.video.paused && Live.active, play = this.btnEls[PLAY_BTN];
     play.querySelector(".ring").innerHTML = paused ? ICON.play : ICON.pause;
     play.querySelector(".lbl").textContent = paused ? "play" : "pause";
+    const cc = this.btnEls.find(b => b.dataset.id === "cc");
+    if (cc) { cc.querySelector(".lbl").textContent = CC.on ? "cc on" : "cc off"; cc.classList.toggle("lit", CC.on); }
   }
 
   // ----- showing / hiding (with the Zune-style motion) -----
@@ -2265,6 +2484,7 @@ class LivePage extends Page {
   setMode(mode) {
     const prev = this.mode, osd = this.q(".lv-osd");
     this.mode = mode;
+    this.el.classList.toggle("osdup", mode !== "hidden"); // captions step up above the controls
     clearInterval(this.tickTimer);
     if (mode === "hidden") { if (prev !== "hidden") this.animateOut(); return; }
     this.hideGen++; // cancel a hide that's still running
@@ -2405,6 +2625,7 @@ class LivePage extends Page {
       if (open) clearTimeout(this.osdTimer); else this.arm("osdHide");
     }
     else if (id === "dual") { this.setMode("hidden"); Dual.pick(); return; }
+    else if (id === "cc") { CC.set(!CC.on); toast(CC.on ? "captions on" : "captions off"); }
     this.fill();
   }
   // skip back / ahead 30 seconds within what the server has buffered; past "now" snaps back to live
@@ -2484,31 +2705,66 @@ class VodPage extends LivePage {
     if (Player.playing) Player.toggle(); // music pauses while a movie plays
     const v = this.video;
     Volume.apply();
-    this.status("starting…");
     v.addEventListener("playing", () => { this.status(""); if (this.mode !== "hidden") this.fill(); });
-    v.addEventListener("waiting", () => this.status("buffering…"));
-    v.addEventListener("ended", () => this.finished());
-    v.addEventListener("error", () => this.status("this couldn't be played — " + lower((v.error && v.error.message) || "unknown problem")));
-    let info;
-    try { info = await Emby.videoStream(this.v.id); }
-    catch (e) { if (this.el) this.status("couldn't start this — " + lower(e.message)); return; }
-    if (!this.el) return;
-    this.info = info;
-    if (info.hls && window.Hls && Hls.isSupported()) {
-      this.hls = new Hls({ startPosition: this.from || -1, xhrSetup: (xhr, url) => { const u = info.withKey(url); if (u !== url) xhr.open("GET", u, true); } });
-      this.hls.on(Hls.Events.ERROR, (e, d) => { if (d.fatal) this.status("the stream stopped — " + lower(String(d.details || "").replace(/([a-z])([A-Z])/g, "$1 $2"))); });
-      this.hls.loadSource(info.url);
-      this.hls.attachMedia(v);
-    } else {
-      v.src = info.url;
-      if (this.from) v.addEventListener("loadedmetadata", () => { v.currentTime = this.from; }, { once: true });
-    }
-    v.play().catch(() => {});
-    Emby.report("start", info, this.from, false);
-    this.reportTimer = setInterval(() => Emby.report("progress", info, v.currentTime, v.paused), 10000);
+    v.addEventListener("waiting", () => { if (!this.fixing) this.status("buffering…"); });
+    v.addEventListener("ended", () => { // ended long before the movie's real length = the stream broke, not the end
+      const real = (this.info && this.info.dur) || this.v.runtime || 0;
+      if (real > 120 && v.currentTime < real - 60) this.trouble(); else this.finished();
+    });
+    v.addEventListener("error", () => this.trouble()); // Edge couldn't decode it: carry on with Emby converting
+    this.startGen = 0;
+    this.start(this.from, false);
     this.banner();
   }
+  async start(from, convert) {
+    const v = this.video, gen = ++this.startGen;
+    this.status(convert ? "buffering…" : "starting…");
+    let info;
+    try { info = await Emby.videoStream(this.v.id, { convert }); }
+    catch (e) { if (this.el && gen === this.startGen) this.status("couldn't start this — " + lower(e.message)); return; }
+    if (!this.el || gen !== this.startGen) { Emby.report("stop", info, from, true); return; } // left meanwhile
+    this.info = info;
+    if (info.hls && window.Hls && Hls.isSupported()) {
+      let recovered = false;
+      const hls = this.hls = new Hls({ startPosition: from || -1, xhrSetup: (xhr, url) => { const u = info.withKey(url); if (u !== url) xhr.open("GET", u, true); } });
+      hls.on(Hls.Events.ERROR, (e, d) => {
+        if (!d.fatal || hls !== this.hls) return;
+        if (d.type === Hls.ErrorTypes.MEDIA_ERROR && !recovered) { recovered = true; hls.recoverMediaError(); } // a glitch: try to ride over it first
+        else this.trouble();
+      });
+      hls.loadSource(info.url);
+      hls.attachMedia(v);
+    } else {
+      v.src = info.url;
+      if (from) v.addEventListener("loadedmetadata", () => { v.currentTime = from; }, { once: true });
+    }
+    v.play().catch(() => {});
+    Emby.report("start", info, from, false);
+    clearInterval(this.reportTimer);
+    this.reportTimer = setInterval(() => Emby.report("progress", info, v.currentTime, v.paused), 10000);
+  }
+  // Playback broke (Edge couldn't decode the file, or the stream fell over): close that attempt and
+  // pick up from the same spot (a couple of seconds back) with Emby converting the video. It only
+  // gives up — with a plain message — if that keeps failing at the same place.
+  trouble() {
+    if (!this.el || this.done || this.fixing) return;
+    const v = this.video, pos = v.currentTime || this.lastFrom || this.from || 0;
+    if (Math.abs(pos - (this.lastFrom || 0)) > 120) this.tries = 0; // it played fine for a while since the last fix
+    this.tries = (this.tries || 0) + 1;
+    if (this.tries > 3) {
+      this.status("this video can't be played right now — emby couldn't convert it either. press back to return.");
+      return;
+    }
+    this.fixing = true;
+    this.lastFrom = Math.max(0, pos - 2);
+    clearInterval(this.reportTimer);
+    if (this.info) Emby.report("stop", this.info, pos, true);
+    if (this.hls) { const h = this.hls; this.hls = null; h.destroy(); }
+    v.pause(); v.removeAttribute("src"); v.load();
+    this.start(this.lastFrom, true).finally(() => { this.fixing = false; });
+  }
   unmount() {
+    this.startGen++; // a start still on its way is dropped
     clearInterval(this.reportTimer);
     const v = this.video;
     if (this.info && !this.done) Emby.report("stop", this.info, v.currentTime, true);
@@ -2643,6 +2899,7 @@ const SETTINGS_TABS = [
       { label: "live tv info hides after", values: () => SECONDS([0, 3, 5, 8, 10]), get: () => Prefs.get("liveHide"), set: v => Prefs.set("liveHide", v) },
       { label: "player controls hide after", values: () => SECONDS([0, 3, 5, 8, 10, 15]), get: () => Prefs.get("osdHide"), set: v => Prefs.set("osdHide", v) },
       { label: "guide enter", values: () => [["info", "show info first"], ["tune", "tune right away"]], get: () => Prefs.get("guideOk"), set: v => Prefs.set("guideOk", v) },
+      { label: "picture in picture", values: () => [["four", "one big + three small"], ["two", "side by side (2 channels)"]], get: () => Prefs.get("pip"), set: v => Prefs.set("pip", v) },
       { label: "music volume", values: () => [100, 80, 60, 40].map(n => [n, `${n}%`]), get: () => Prefs.get("musicVol"), set: v => { Prefs.set("musicVol", v); Volume.apply(); } },
     ],
   },
@@ -3446,6 +3703,9 @@ async function runAction(action) {
   if (a === "info" || a === "osd") { if (p instanceof LivePage) { p.controls(); p.press("info"); } return true; }
   if (a === "closeinfo") { if (p instanceof LivePage) p.setMode("hidden"); return true; }
   if (a === "contextmenu") return true;
+  if (["showsubtitles", "subtitles", "captions", "closedcaptions", "cc", "togglesubtitles"].includes(a)) { CC.set(!CC.on); toast(CC.on ? "captions on" : "captions off"); return true; }
+  if (["subtitleson", "captionson", "ccon"].includes(a)) { CC.set(true); toast("captions on"); return true; }
+  if (["subtitlesoff", "captionsoff", "ccoff", "hidesubtitles"].includes(a)) { CC.set(false); toast("captions off"); return true; }
   throw new Error(`unknown action ${action}`);
 }
 
@@ -3502,6 +3762,7 @@ const RPC = {
   },
   "Guide.Refresh": () => GuideFeed.push(),
   // picture in picture, same answers as the old hub
+  // picture in picture (up to four pictures), same answers as the old hub
   "Player.AddDualChannel": async p => {
     const q = String(p.channel || p.query || "").trim();
     if (!q) return { error: "Which channel?" };
@@ -3509,13 +3770,14 @@ const RPC = {
     const idx = dualChannelIndex(q);
     if (idx < 0) return { error: "Channel not found: " + q };
     const name = Live.guide.channels[idx].name;
-    if (idx === Live.i && !(Dual.mode === "play" && Dual.audio === "side")) return { error: "Already watching that channel" };
-    if (Dual.mode === "play") {
-      if (idx === Dual.i) return { ok: true, channel: name, mode: "already" };
-      Dual.tune(idx); return { ok: true, channel: name, mode: "swap" };
-    }
+    if (Dual.showing(idx) >= 0) return Dual.on ? { ok: true, channel: name, mode: "already" } : { error: "Already watching that channel" };
+    if (Dual.mode === "leaving") await wait(600);
     if (Dual.mode === "pick") { Dual.choose(idx); return { ok: true, channel: name, mode: "added" }; }
-    if (Dual.mode === "leaving") await wait(500);
+    if (Dual.on && Dual.addSlot() < 0) { // all four in use: the last small one changes channel
+      const last = Dual.smalls[Dual.smalls.length - 1];
+      last.i = idx; last.video.style.opacity = 0; Dual.open(last, true); Dual.overlay();
+      return { ok: true, channel: name, mode: "swap" };
+    }
     await showPlayer(); await settled();
     const pg = top(); if (pg instanceof LivePage) pg.setMode("hidden");
     if (!Dual.pick(idx) || !Dual.choose(idx)) return { error: "Could not add channel." };
@@ -3523,23 +3785,24 @@ const RPC = {
   },
   "Player.RemoveDualChannel": async p => {
     if (!Dual.on) return { error: "Not in dual view" };
-    if (Dual.mode === "pick") { Dual.cancel(); return { ok: true, removed: "pick" }; }
+    if (Dual.mode === "pick") { Dual.key("back"); return { ok: true, removed: "pick" }; }
     if (Dual.mode !== "play") { Dual.close(); return { ok: true, removed: "dual" }; }
     const q = String(p.channel || "").trim();
-    if (!q) { Dual.exit("main"); return { ok: true, removed: "secondary" }; }
+    if (!q) { Dual.remove(Dual.smalls.length); return { ok: true, removed: "secondary" }; } // the last one added
     const idx = dualChannelIndex(q);
     if (idx < 0) return { error: "Channel not found: " + q };
+    const k = Dual.showing(idx);
+    if (k < 0) return { error: "That channel is not in dual view" };
     const name = Live.guide.channels[idx].name;
-    if (idx === Dual.i) { Dual.exit("main"); return { ok: true, removed: name, kept: "primary" }; }
-    if (idx === Live.i) { Dual.exit("side"); return { ok: true, removed: name, kept: "secondary" }; }
-    return { error: "That channel is not in dual view" };
+    Dual.remove(k);
+    return { ok: true, removed: name, kept: k === 0 ? "secondary" : "primary" };
   },
   "Player.ExitDualView": async p => {
     if (!Dual.on) return { ok: true, kept: "primary" };
-    const keep = p.keep === "secondary" ? "side" : "main";
-    const i = keep === "side" ? Dual.i : Live.i;
+    const keep = p.keep === "secondary" ? Math.min(1, Dual.smalls.length) : 0;
+    const i = Dual.pics()[keep].i;
     Dual.exit(keep);
-    return { ok: true, kept: keep === "side" ? "secondary" : "primary", playIndex: i };
+    return { ok: true, kept: keep ? "secondary" : "primary", playIndex: i };
   },
   // lyrics, same answers as the old hub
   "Player.SetLyricsOverlay": async p => {
@@ -3560,11 +3823,7 @@ const RPC = {
     };
   },
 };
-function dualChannelIndex(q) {
-  const chans = (Live.guide && Live.guide.channels) || [];
-  const ch = chans.find(c => c.number && norm(c.number) === norm(q)) || bestMatch(chans, q, c => c.name);
-  return ch ? chans.indexOf(ch) : -1;
-}
+
 RPC["UI.ActivateView"] = RPC["GUI.ActivateWindow"];
 
 // keeps asking the helper for the next voice command (long-poll), runs it and sends back the answer

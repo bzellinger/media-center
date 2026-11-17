@@ -73,7 +73,7 @@ Other setup, all under **Settings**, and all saved on this PC:
 
 - **Music, Movies, TV Shows** — your Emby library. Movies and episodes can resume where you stopped.
 - **Home Videos** — home movies and other videos you keep in an Emby “home videos” library. You can browse by folder, see everything, or see the newest ones. A video you already started can resume.
-- **TV Guide** — the channel grid from Emby. Before you sign in, it shows sample channels so you can try the screen. Live TV can keep playing behind the menus, and you can watch two channels side by side.
+- **TV Guide** — the channel grid from Emby. Before you sign in, it shows sample channels so you can try the screen. Live TV can keep playing behind the menus. On the player, the **pip** button adds more channels: one big picture and up to three small ones, or two side by side. Pick which look under **Settings**, then **Playback**. The **captions** button turns closed captions on or off for live TV, and that choice is remembered. Arrows move between the pictures (you hear the one with the frame). Enter swaps a small picture into the big spot, or returns to one full-screen channel. Back closes the framed picture.
 - **Radio** — DI.FM, RadioTunes, JazzRadio, RockRadio, Classical Radio, and ZenRadio. These need a premium listen key from those sites (player settings, then hardware player). One key covers all six.
 - **YouTube** — opens the VacuumTube app full screen. Install VacuumTube first, then set its path under **Settings**, then **Apps**.
 - **Pictures** — photos from an Emby library named Photos or Pictures, or from a combined home-videos-and-photos library. **Folders** follows your folders. **All** shows every photo. **Recent** shows the newest ones. Enter on a photo fills the screen. Left and right move between photos. Enter starts a slideshow, about 7 seconds each. Up shows the name and date.
@@ -83,10 +83,12 @@ On **Settings**, then **Hub menu**, the instructions sit to the right of the lis
 
 ## What's new
 
+- Live TV can show up to four channels at once: one big picture and three small ones. **Settings**, then **Playback**, can switch that to two channels side by side.
+- Live TV has a **captions** button. On or off is remembered.
+- If a movie or episode will not play as it is, the app asks Emby to convert it and continues from the same spot.
 - **Pictures** is a photo browser, with folders and a full-screen slideshow.
-- **Home Videos** is a new item on the home menu for videos you keep outside Movies and TV Shows.
+- **Home Videos** is on the home menu for videos you keep outside Movies and TV Shows.
 - **TV Guide** can be opened before you sign in. It uses sample channels until Emby is connected.
-- The Hub menu instructions stay on screen, to the right of the list.
 
 While something is playing, go back to the home menu and press **Back** again. That jumps to the full-screen player.
 

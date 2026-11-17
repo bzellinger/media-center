@@ -484,21 +484,33 @@ html, body {
 }
 .live-page { background: transparent; }
 
-/* ---------- picture in picture: two channels side by side (app.js: Dual) ---------- */
-.vlayer .lv-video {
-  transition: left 440ms var(--ease), width 440ms var(--ease), opacity 420ms ease, transform 440ms var(--ease);
+/* ---------- picture in picture: one big + up to three small (app.js: Dual) ----------
+   Every picture is a full-size video that's only moved and scaled from its top-left corner
+   (smooth on any graphics card). The big spot is 1440×810 on the left, the small ones 480×270
+   stacked on the right. */
+.vlayer .lv-video { transform-origin: 0 0; transition: transform 480ms var(--ease), opacity 420ms ease; }
+.vlayer.multi { background: #000; }
+.mv { position: absolute; inset: 0; }
+.mv-frame {
+  position: absolute; left: 0; top: 0; box-sizing: border-box; border: 5px solid var(--fg); opacity: 0;
+  box-shadow: 0 0 24px rgba(0,0,0,.6); transition: transform 380ms var(--ease), width 380ms var(--ease), height 380ms var(--ease), opacity 250ms;
 }
-.vlayer .lv-video.main { left: 0; width: 100%; }
-.vlayer .lv-video.side { left: 0; width: 50%; opacity: 0; transform: translateX(-8%); pointer-events: none; }
-.vlayer.dual .lv-video.main { left: 50%; width: 50%; }                      /* the picture glides to the right half */
-.vlayer.dual-play .lv-video.side { opacity: 1; transform: none; }           /* the second one comes in on the left */
-.vlayer.dual-play .lv-video.aud { outline: 4px solid var(--fg); outline-offset: -4px; } /* the side you hear */
-.vlayer.keep-side .lv-video.side { width: 100%; opacity: 1; transform: none; } /* left one takes the whole screen */
-.vlayer.keep-side .lv-video.main { opacity: 0; transform: translateX(10%); }
+.mv-frame.on { opacity: 1; }
+.mv-tag {
+  position: absolute; box-sizing: border-box; padding: 0 22px; font-size: 26px; line-height: 56px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .03em; color: rgba(255,255,255,.88); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: linear-gradient(transparent, rgba(0,0,0,.7)); text-shadow: 0 2px 8px rgba(0,0,0,.9);
+}
+.mv-tag.small { font-size: 18px; line-height: 40px; padding: 0 14px; }
+.mv-tag b { font-weight: 700; color: #fff; }
+.mv-add {
+  position: absolute; box-sizing: border-box; border: 2px dashed rgba(255,255,255,.3); display: grid; place-items: center;
+  color: rgba(255,255,255,.55);
+}
 .lv-dual { position: absolute; inset: 0; pointer-events: none; }
-.lv-pick { position: absolute; left: 96px; top: 120px; width: 768px; }
+.lv-pick { position: absolute; left: 96px; top: 170px; width: 700px; } /* over the big picture */
 .lv-pick-h { margin-bottom: 18px; }
-.lv-pick .list { overflow: hidden; }
+.lv-pick .list { position: relative; overflow: hidden; } /* sits below the heading, so the dark panel covers the whole list */
 .r-dual { display: flex; align-items: center; gap: 26px; color: var(--dim); transition: color 140ms; }
 .r-dual .n { width: 110px; flex: none; font-size: 40px; font-weight: 300; }
 .r-dual .tx { min-width: 0; }
@@ -506,12 +518,6 @@ html, body {
 .r-dual .t2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .r-dual.focus { color: var(--fg); }
 .r-dual.main { opacity: .45; }
-.lv-tags { position: absolute; left: 0; right: 0; top: 40px; display: flex; }
-.lv-tag {
-  width: 50%; padding: 0 40px; font-size: 24px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em;
-  color: rgba(255,255,255,.85); text-shadow: 0 2px 8px rgba(0,0,0,.9); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.lv-tag b { font-weight: 700; color: #fff; }
 .lv-dhint {
   position: absolute; left: 0; right: 0; bottom: 48px; text-align: center; opacity: 0;
   text-shadow: 0 2px 8px rgba(0,0,0,.9);
@@ -605,6 +611,22 @@ html, body {
 .lv-peek.on { opacity: 1; translate: 0 0; }
 .lv-peek .lv-bar { max-width: none; margin-top: 8px; }
 
+/* ---------- closed captions on live tv (app.js: CC) ----------
+   White text on a soft dark band, centered low on the picture; it steps up above the player
+   controls / info banner while those are showing. */
+.lv-cc {
+  position: absolute; left: 0; width: 100%; bottom: 80px; text-align: center; pointer-events: none;
+  opacity: 0; transition: opacity 200ms, bottom 450ms var(--ease);
+}
+.lv-cc.on { opacity: 1; }
+.lv-cc span {
+  display: inline-block; margin: 2px 0; padding: 4px 18px; font-size: 44px; line-height: 1.25; font-weight: 400;
+  color: #fff; background: rgba(0,0,0,.72); text-shadow: 0 1px 3px rgba(0,0,0,.8);
+}
+.lv-cc.small span { font-size: 18px; padding: 2px 8px; }
+.live-page.osdup .lv-cc:not(.small) { bottom: 560px; }   /* above the info and controls */
+.rb.lit .ring { border-color: var(--fg); box-shadow: inset 0 0 0 3px var(--fg); } /* captions are on */
+
 /* ---------- music screensaver (app.js: Saver) ---------- */
 .saver {
   position: absolute; inset: 0; z-index: 60; background: #000; overflow: hidden;
@@ -656,7 +678,7 @@ html, body {
   padding-top: 260px;
   background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,.5) 28%, rgba(0,0,0,.82) 60%, rgba(0,0,0,.94));
 }
-.lv-osd, .lv-peek, .lv-tags, .lv-dhint, .lv-status, .vchip, .np-head, .np-side, .np-lyr, .lv-pick {
+.lv-osd, .lv-peek, .mv, .lv-dhint, .lv-status, .vchip, .np-head, .np-side, .np-lyr, .lv-pick {
   text-shadow: 0 2px 6px rgba(0,0,0,.85), 0 0 22px rgba(0,0,0,.55);
 }
 .lv-osd .lv-sub, .lv-osd .lv-times, .lv-osd .rb .lbl { color: rgba(255,255,255,.82); } /* small print a step brighter */
@@ -668,7 +690,6 @@ html, body {
 .lv-osd .lv-bar, .np-bar { box-shadow: 0 1px 6px rgba(0,0,0,.6); }
 .lv-peek { padding: 60px 96px 44px; left: 0; right: 0; bottom: 0; background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,.75)); }
 .lv-pick { padding: 24px 30px 30px; margin: -24px 0 0 -30px; background: rgba(0,0,0,.72); }
-.lv-tag { background: linear-gradient(rgba(0,0,0,.6), rgba(0,0,0,0)); padding-top: 12px; padding-bottom: 24px; }
 .np-shade { background: linear-gradient(90deg, rgba(0,0,0,.8), rgba(0,0,0,.55) 60%, rgba(0,0,0,.7)), linear-gradient(rgba(0,0,0,0) 50%, rgba(0,0,0,.45)); }
 
 /* ---------- radio on the now playing screen ---------- */

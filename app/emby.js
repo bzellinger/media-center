@@ -292,10 +292,16 @@ window.Emby = (() => {
   };
   const withKey = url => /[?&]api_key=/.test(url) ? url : url + (url.includes("?") ? "&" : "?") + "api_key=" + encodeURIComponent(s.token);
 
-  async function liveStream(channelId) {
+  // light: a small, low-bitrate stream (about 480p) for the little picture-in-picture windows,
+  // so four pictures cost the TV computer and the Emby server about as much as one and a half
+  // The normal ceiling is 20 Mbps: well above what H.264 channels use (Frndly / Philo run ~3–8 Mbps, so
+  // Emby passes them along untouched), while over-the-air MPEG-2, which Emby must convert, comes out at
+  // a sensible size instead of the old 40 Mbps.
+  async function liveStream(channelId, { light = false } = {}) {
+    const rate = light ? 1500000 : 20000000;
     const r = await req(`/Items/${channelId}/PlaybackInfo?` + Q({
-      UserId: s.userId, StartTimeTicks: 0, IsPlayback: true, AutoOpenLiveStream: true, MaxStreamingBitrate: 40000000,
-    }), { method: "POST", body: { DeviceProfile: BROWSER_PROFILE } });
+      UserId: s.userId, StartTimeTicks: 0, IsPlayback: true, AutoOpenLiveStream: true, MaxStreamingBitrate: rate,
+    }), { method: "POST", body: { DeviceProfile: { ...BROWSER_PROFILE, MaxStreamingBitrate: rate } } });
     if (r && r.ErrorCode) throw new Error(lowerWords(r.ErrorCode));
     const ms = r && r.MediaSources && r.MediaSources[0];
     if (!ms) throw new Error("emby didn't offer a stream for this channel");
@@ -320,19 +326,40 @@ window.Emby = (() => {
   const VIDEO_PROFILE = {
     MaxStreamingBitrate: 120000000, MaxStaticBitrate: 120000000, MusicStreamingTranscodingBitrate: 192000,
     DirectPlayProfiles: [
-      { Container: "mp4,m4v", Type: "Video", VideoCodec: "h264,vp9,av1", AudioCodec: "aac,mp3,opus,flac" },
-      { Container: "webm", Type: "Video", VideoCodec: "vp8,vp9,av1", AudioCodec: "vorbis,opus" },
+      { Container: "mp4,m4v", Type: "Video", VideoCodec: "h264,vp9", AudioCodec: "aac,mp3,opus,flac" },
+      { Container: "webm", Type: "Video", VideoCodec: "vp8,vp9", AudioCodec: "vorbis,opus" },
     ],
     TranscodingProfiles: [{
       Container: "ts", Type: "Video", VideoCodec: "h264", AudioCodec: "aac", Context: "Streaming",
       Protocol: "hls", MaxAudioChannels: "6", MinSegments: "1", BreakOnNonKeyFrames: true,
     }],
-    ContainerProfiles: [], CodecProfiles: [], ResponseProfiles: [],
+    ContainerProfiles: [], ResponseProfiles: [],
+    // Only what Edge reliably decodes goes through untouched: 8-bit H.264 (normal profiles and
+    // levels, up to 4K) and 8-bit VP9 up to 1080p. 10-bit H.264, HDR VP9, AV1… Emby converts.
+    CodecProfiles: [
+      {
+        Type: "Video", Codec: "h264", Conditions: [
+          { Condition: "LessThanEqual", Property: "VideoBitDepth", Value: "8", IsRequired: false },
+          { Condition: "EqualsAny", Property: "VideoProfile", Value: "high|main|baseline|constrained baseline", IsRequired: false },
+          { Condition: "LessThanEqual", Property: "VideoLevel", Value: "52", IsRequired: false },
+          { Condition: "LessThanEqual", Property: "Width", Value: "3840", IsRequired: false },
+        ],
+      },
+      {
+        Type: "Video", Codec: "vp9", Conditions: [
+          { Condition: "LessThanEqual", Property: "VideoBitDepth", Value: "8", IsRequired: false },
+          { Condition: "LessThanEqual", Property: "Width", Value: "1920", IsRequired: false },
+        ],
+      },
+    ],
     SubtitleProfiles: [{ Format: "vtt", Method: "External" }],
   };
-  async function videoStream(itemId) {
-    const r = await req(`/Items/${itemId}/PlaybackInfo?` + Q({ UserId: s.userId, IsPlayback: true, AutoOpenLiveStream: true, MaxStreamingBitrate: 120000000 }),
-      { method: "POST", body: { DeviceProfile: VIDEO_PROFILE } });
+  // convert: true asks Emby to convert no matter what (used when Edge choked on the file as it is)
+  async function videoStream(itemId, { convert = false } = {}) {
+    const r = await req(`/Items/${itemId}/PlaybackInfo?` + Q({
+      UserId: s.userId, IsPlayback: true, AutoOpenLiveStream: true, MaxStreamingBitrate: 120000000,
+      EnableDirectPlay: convert ? false : undefined, EnableDirectStream: convert ? false : undefined,
+    }), { method: "POST", body: { DeviceProfile: VIDEO_PROFILE } });
     if (r && r.ErrorCode) throw new Error(lowerWords(r.ErrorCode));
     const ms = r && r.MediaSources && r.MediaSources[0];
     if (!ms) throw new Error("emby didn't offer a way to play this");
