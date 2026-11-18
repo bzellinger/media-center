@@ -21,6 +21,9 @@ Safety
   * It will only ever start a file named VacuumTube.exe, and the voice assistant's app.py and
     local_listener_single_whisper.py from the folder set in settings → apps.
   * The only files it reads for the app (besides its own) are .lrc lyrics files.
+  * "Sign in to youtube" opens only YouTube's own Google sign-in page, in the app's Edge profile.
+  * YouTube "enter this code" sign-in: the long-lived pass stays in tools/apps.json; the app gets
+    only short-lived, read-only access to your YouTube (subscriptions, playlists, likes).
   * The guide copy (tools/guide_cache.json) holds listings only — never your Emby sign-in.
 
 Python 3.8+ standard library only — nothing to install.
@@ -331,6 +334,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path.startswith("/apps/"):
             if not self.trusted():
                 return self.send_json({"error": "not allowed"}, 403)
+            if path == "/apps/youtube/account":
+                return self.send_json({"server": True, **yt_status()})
+            if path == "/apps/youtube/token":
+                return self.send_json(yt_token())
             if path == "/apps/youtube":
                 p = load_config().get("vacuumtube", "")
                 return self.send_json({"server": True, "path": p, "ready": bool(p) and os.path.isfile(p)})
@@ -363,6 +370,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.send_json({"ok": True, "path": exe})
         if path == "/apps/youtube/launch":
             return self.send_json(launch_vacuumtube())
+        if path == "/apps/youtube/signin":
+            return self.send_json(youtube_signin())
+        if path == "/apps/youtube/client":
+            body = self.read_json()
+            cid, secret = str(body.get("id") or "").strip(), str(body.get("secret") or "").strip()
+            if not cid.endswith(".apps.googleusercontent.com"):
+                return self.send_json({"ok": False, "error": "that doesn't look like a google client id (it ends in .apps.googleusercontent.com)"})
+            cfg = load_config()
+            cfg["yt_client_id"] = cid
+            if secret:
+                cfg["yt_client_secret"] = secret
+            save_config(cfg)
+            return self.send_json({"ok": True})
+        if path == "/apps/youtube/code":
+            return self.send_json(yt_start())
+        if path == "/apps/youtube/signout":
+            return self.send_json(yt_signout())
         if path == "/apps/assistant/path":
             folder, err = valid_assistant(self.read_json().get("path"))
             if err:
@@ -460,7 +484,161 @@ def launch_vacuumtube():
     return {"ok": True}
 
 
-def bring_to_front(pid, timeout=20.0):
+# ---------------------------------------------------------------- youtube "enter this code" sign-in
+# Google's sign-in for TVs: the helper asks Google for a short code, the screen shows it, you enter it
+# at google.com/device on your phone. The long-lived pass Google returns (refresh token) and the
+# sign-in client's details stay here in tools/apps.json; the app only ever gets short-lived access.
+YT_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
+YT_LOCK = threading.Lock()
+YT_FLOW = {"state": "none"}  # none | waiting | signed_in | denied | expired | error
+YT_ACCESS = {"token": None, "until": 0}
+
+
+def google_post(url, fields):
+    import urllib.request
+    import urllib.error
+    from urllib.parse import urlencode
+    req = urllib.request.Request(url, data=urlencode(fields).encode(),
+                                 headers={"Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            out = json.loads(e.read() or b"{}")
+        except ValueError:
+            out = {"error": f"http {e.code}"}
+        out["_status"] = e.code
+        return out
+    except OSError as e:
+        return {"error": "network", "error_description": str(e)}
+
+
+def yt_client():
+    cfg = load_config()
+    return cfg.get("yt_client_id", ""), cfg.get("yt_client_secret", "")
+
+
+def yt_status():
+    cid, _ = yt_client()
+    with YT_LOCK:
+        st = dict(YT_FLOW)
+    st.pop("device_code", None)
+    st["client"] = bool(cid)
+    st["signed_in"] = bool(load_config().get("yt_refresh"))
+    if st["signed_in"] and st["state"] in ("none", "expired", "denied", "error"):
+        st["state"] = "signed_in"
+    return st
+
+
+def yt_start():
+    cid, secret = yt_client()
+    if not cid:
+        return {"ok": False, "error": "add the sign-in client id and secret first"}
+    d = google_post("https://oauth2.googleapis.com/device/code", {"client_id": cid, "scope": YT_SCOPE})
+    if "device_code" not in d:
+        return {"ok": False, "error": d.get("error_description") or d.get("error") or "google didn't give a code"}
+    flow = {"state": "waiting", "device_code": d["device_code"], "code": d["user_code"],
+            "url": d.get("verification_url") or d.get("verification_uri") or "https://www.google.com/device",
+            "until": time.time() + int(d.get("expires_in", 1800)), "every": int(d.get("interval", 5))}
+    with YT_LOCK:
+        YT_FLOW.clear()
+        YT_FLOW.update(flow)
+    threading.Thread(target=yt_poll, args=(flow["device_code"],), daemon=True).start()
+    return {"ok": True, "code": flow["code"], "url": flow["url"], "expires_in": int(d.get("expires_in", 1800))}
+
+
+def yt_poll(device_code):
+    cid, secret = yt_client()
+    every = YT_FLOW.get("every", 5)
+    while True:
+        time.sleep(every)
+        with YT_LOCK:
+            if YT_FLOW.get("device_code") != device_code or YT_FLOW.get("state") != "waiting":
+                return
+            if time.time() > YT_FLOW.get("until", 0):
+                YT_FLOW["state"] = "expired"
+                return
+        d = google_post("https://oauth2.googleapis.com/token", {
+            "client_id": cid, "client_secret": secret, "device_code": device_code,
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code"})
+        err = d.get("error")
+        if err == "authorization_pending":
+            continue
+        if err == "slow_down":
+            every += 5
+            continue
+        with YT_LOCK:
+            if YT_FLOW.get("device_code") != device_code:
+                return
+            if d.get("refresh_token"):
+                cfg = load_config()
+                cfg["yt_refresh"] = d["refresh_token"]
+                save_config(cfg)
+                YT_ACCESS.update(token=d.get("access_token"), until=time.time() + int(d.get("expires_in", 3600)) - 60)
+                YT_FLOW.clear()
+                YT_FLOW.update(state="signed_in")
+            else:
+                YT_FLOW.clear()
+                YT_FLOW.update(state="denied" if err == "access_denied" else "expired" if err == "expired_token" else "error",
+                               error=d.get("error_description") or err or "unknown")
+            return
+
+
+def yt_token():
+    """A short-lived access token for the app (refreshed here when needed)."""
+    with YT_LOCK:
+        if YT_ACCESS["token"] and time.time() < YT_ACCESS["until"]:
+            return {"ok": True, "token": YT_ACCESS["token"], "until": YT_ACCESS["until"]}
+    cid, secret = yt_client()
+    refresh = load_config().get("yt_refresh")
+    if not refresh or not cid:
+        return {"ok": False, "error": "not signed in"}
+    d = google_post("https://oauth2.googleapis.com/token", {"client_id": cid, "client_secret": secret,
+                                                           "refresh_token": refresh, "grant_type": "refresh_token"})
+    if not d.get("access_token"):
+        if d.get("error") == "invalid_grant":  # the sign-in was withdrawn or ran out: sign in again
+            cfg = load_config()
+            cfg.pop("yt_refresh", None)
+            save_config(cfg)
+        return {"ok": False, "error": d.get("error_description") or d.get("error") or "couldn't refresh"}
+    with YT_LOCK:
+        YT_ACCESS.update(token=d["access_token"], until=time.time() + int(d.get("expires_in", 3600)) - 60)
+        return {"ok": True, "token": YT_ACCESS["token"], "until": YT_ACCESS["until"]}
+
+
+def yt_signout():
+    refresh = load_config().get("yt_refresh")
+    if refresh:
+        google_post("https://oauth2.googleapis.com/revoke", {"token": refresh})
+    cfg = load_config()
+    cfg.pop("yt_refresh", None)
+    save_config(cfg)
+    with YT_LOCK:
+        YT_ACCESS.update(token=None, until=0)
+        YT_FLOW.clear()
+        YT_FLOW.update(state="none")
+    return {"ok": True}
+
+
+def youtube_signin():
+    """Opens YouTube's own sign-in page in a new window of the app's Edge profile (browser-data), so
+    a YouTube Premium sign-in there also covers the videos the app plays. Only ever this one address;
+    the login itself is typed by the user on Google's page."""
+    if sys.platform != "win32":
+        return {"ok": False, "error": "this only works on windows"}
+    profile = os.path.abspath(os.path.join(HERE, "..", "browser-data"))
+    url = "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F"
+    try:
+        subprocess.Popen(f'cmd /c start "" msedge --user-data-dir="{profile}" --new-window "{url}"',
+                         creationflags=subprocess.CREATE_NO_WINDOW, close_fds=True)
+    except OSError as e:
+        return {"ok": False, "error": f"couldn't start edge ({e})"}
+    threading.Thread(target=bring_to_front, args=(0,), kwargs={"words": ("sign in", "google", "youtube")}, daemon=True).start()
+    return {"ok": True}
+
+
+def bring_to_front(pid, timeout=20.0, words=None):
     """Windows won't let a background program (this helper) put a new window in front of the
     full-screen app, so VacuumTube opened behind it. Wait for its window to appear, then bring it
     forward with the usual workaround (borrow the input focus of the window that has it)."""
@@ -484,7 +662,10 @@ def bring_to_front(pid, timeout=20.0):
             user32.GetWindowTextW(hwnd, buf, 256)
             title = buf.value.lower()
             # its own window, or (if VacuumTube was already open and handed over) one titled like it
-            if owner.value == pid or "vacuumtube" in title or ("youtube" in title and "media center" not in title):
+            if words is not None:  # a window found by its title (e.g. youtube's sign-in page in Edge)
+                if any(w in title for w in words) and "media center" not in title:
+                    found.append(hwnd)
+            elif owner.value == pid or "vacuumtube" in title or ("youtube" in title and "media center" not in title):
                 found.append(hwnd)
             return True
 

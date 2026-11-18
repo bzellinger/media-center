@@ -90,7 +90,7 @@ Theme.apply();
 
 /* ============ playback preferences (settings → playback) ============ */
 const Prefs = {
-  DEFAULTS: { npHide: 5, npArt: "hide", liveHide: 5, osdHide: 5, guideOk: "info", musicVol: 100, saver: 60, pip: "four", cc: false },
+  DEFAULTS: { npHide: 5, npArt: "hide", liveHide: 5, osdHide: 5, guideOk: "info", musicVol: 100, saver: 60, pip: "four", cc: false, ytcc: false, ytOpen: "native" },
   load() { try { return { ...this.DEFAULTS, ...(JSON.parse(localStorage.getItem("mc.prefs")) || {}) }; } catch { return { ...this.DEFAULTS }; } },
   get(k) { return this.load()[k]; },
   set(k, v) { try { localStorage.setItem("mc.prefs", JSON.stringify({ ...this.load(), [k]: v })); } catch {} },
@@ -273,6 +273,7 @@ const Volume = {
     audio.volume = v * Prefs.get("musicVol") / 100;
     if (this.video) this.video.volume = v;
     document.querySelectorAll(".vod-video").forEach(m => { m.volume = v; }); // a movie playing
+    if (window.__ytPlayer) try { window.__ytPlayer.setVolume(Math.round(v * 100)); } catch {} // a youtube video
   },
   set(n) { this.level = Math.round(clamp(Number(n) || 0, 0, 100)); this.muted = false; this.apply(); return this.level; },
 };
@@ -530,7 +531,7 @@ function List({ items, itemH, height = 760, row, focus = 0 }) {
 
 // Grid of covers or posters, like the Zune HD albums view. (It still copes with "letter" tiles, but none are added any more.)
 function Grid({ items, cols, w, h, gap = 24, height = 760, cell, focus = 0 }) {
-  const view = el("div", "list"); view.style.height = height + "px";
+  const view = el("div", "list grid"); view.style.height = height + "px"; // ("grid": room around the edges for the picked cover's border)
   const inner = el("div", "grid-inner"); view.append(inner);
   const stepX = w + gap, stepY = h + gap;
   const tiles = items.map((it, i) => {
@@ -710,9 +711,9 @@ function playAndShow(tracks, i) {
 
 /* ============ home ============ */
 // Hub menu: order and which items show are set in settings → hub menu. Settings always stays last.
-const MENU_ALL = ["music", "movies", "tv shows", "home videos", "tv guide", "radio", "youtube", "pictures"];
+const MENU_ALL = ["music", "movies", "tv shows", "home videos", "tv guide", "recordings", "radio", "youtube", "pictures"];
 // how each menu word is written (the ids stay lowercase internally; the menu shows them in capitals)
-const MENU_LABEL = { music: "Music", movies: "Movies", "tv shows": "TV Shows", "tv guide": "TV Guide", radio: "Radio", youtube: "YouTube", "home videos": "Home Videos", pictures: "Pictures", settings: "Settings" };
+const MENU_LABEL = { music: "Music", movies: "Movies", "tv shows": "TV Shows", "tv guide": "TV Guide", radio: "Radio", youtube: "YouTube", "home videos": "Home Videos", recordings: "Recordings", pictures: "Pictures", settings: "Settings" };
 // saved as [[id, shown], …]; items added in later versions are appended so they still appear
 function menuLayout() {
   const saved = (Prefs.get("menu") || []).filter(([id]) => MENU_ALL.includes(id));
@@ -731,14 +732,16 @@ function loadQuickplay() {
     Emby.resume().catch(() => []),
     Emby.newAlbums(8).catch(() => []),
     Emby.newMovies(8).catch(() => []),
-  ]).then(([resume, albums, movies]) => {
-    quick.rows = [["continue", resume], ["new music", albums], ["new movies", movies]].filter(r => r[1].length);
+    Emby.recordings().then(l => l.filter(r => !r.played)).catch(() => []),
+  ]).then(([resume, albums, movies, recs]) => {
+    quick.rows = [["continue", resume], ["new recordings", recs], ["new music", albums], ["new movies", movies]].filter(r => r[1].length);
     quick.loading = null;
   });
   return quick.loading;
 }
 function openItem(x) {
   if (!x) return;
+  if (x.rec) return playRecording(x);
   if (x.artist && !x.type) return go(new AlbumPage(x));
   if (x.type === "Series") return openShow(x);
   return go(new VideoPage(x));
@@ -777,8 +780,8 @@ class Home extends Page {
       qp.append(el("div", "qp-label t", esc(title(label))));
       const row = el("div", "qp-row"); qp.append(row);
       return list.slice(0, 5).map(x => {
-        const name = x.type === "Episode" && x.seriesName ? x.seriesName : x.title;
-        const sub = x.artist && !x.type ? x.artist.name : x.type === "Episode" ? `s${x.season || "?"} e${x.episode || "?"}` : x.year;
+        const name = x.rec ? x.title : x.type === "Episode" && x.seriesName ? x.seriesName : x.title;
+        const sub = x.rec ? (x.recording ? "recording now" : x.ep || x.channel) : x.artist && !x.type ? x.artist.name : x.type === "Episode" ? `s${x.season || "?"} e${x.episode || "?"}` : x.year;
         const t = el("div", "qp-tile t", `${x.type ? imgTag(x.thumb || x.img || cover(x)) : coverTag(x)}<div class="cap">${esc(lower(name))}<span>${esc(lower(sub))}</span></div>`);
         t.item = x; row.append(t); return t;
       });
@@ -842,7 +845,7 @@ class Home extends Page {
       if (k === "up" || k === "down") { this.mid = this.items[clamp(i + (k === "up" ? -1 : 1), 0, this.items.length - 1)]; this.paint(); return true; }
       if (k === "left") { if (this.rows.length) this.setSec(1); return true; }
       if (k === "ok") {
-        if (this.mid === "youtube") { Apps.launch(); return true; } // opens VacuumTube; the app stays here
+        if (this.mid === "youtube" && !Tube.native) { Apps.launch(); return true; } // no api key, or set to VacuumTube: opens VacuumTube; the app stays here
         go(this.mid === "np" ? new NowPlaying() : this.mid === "lv" ? new LivePage(Live.guide, Live.i) : sectionPage(this.mid));
         return true;
       }
@@ -886,6 +889,7 @@ class PivotPage extends Page {
     this.body.classList.toggle("dimfocus", this.zone === "head");
   }
   render() {
+    if (this.stale && this.stale()) this.sections.forEach(s => { s.data = undefined; s.loading = null; }); // (recordings changed meanwhile)
     const root = el("div", "pivot-page" + (this.subtitle ? " has-sub" : ""));
     this.root = root;
     this.titleEl = el("div", "sec-title z", esc(lower(this.title)));
@@ -1384,6 +1388,280 @@ function radioPage() {
   });
 }
 
+/* ============ youtube, native (your api key + YouTube's own embedded player) ============
+   Lists come from the official YouTube Data API with your key (settings → youtube). Videos play in
+   YouTube's embedded player, full screen, under the app's own Zune-style controls. Signed in to
+   youtube.com in the app's browser (settings → youtube → sign in), YouTube Premium applies, so no ads.
+   (Named Tube, not YT: YouTube's player script claims the name YT for itself.) */
+const Tube = {
+  get key() { return String(Prefs.get("ytKey") || "").trim(); },
+  get native() { return !!this.key && Prefs.get("ytOpen") !== "vacuumtube"; }, // else the menu opens VacuumTube
+  region() { const m = String(navigator.language || "").match(/-([A-Za-z]{2})$/); return (m ? m[1] : "US").toUpperCase(); },
+  async api(path, params) {
+    if (!this.key) throw new Error("add your youtube api key in settings → youtube");
+    const r = await fetch(`https://www.googleapis.com/youtube/v3/${path}?` + new URLSearchParams({ ...params, key: this.key }));
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const why = (d.error && d.error.errors && d.error.errors[0] && d.error.errors[0].reason) || (d.error && d.error.status) || r.status;
+      throw new Error({
+        keyInvalid: "the youtube api key isn't valid — check it in settings → youtube",
+        quotaExceeded: "today's youtube allowance is used up — it resets at midnight pacific time",
+        dailyLimitExceeded: "today's youtube allowance is used up — it resets at midnight pacific time",
+        accessNotConfigured: "the youtube data api isn't turned on for this key in google's console",
+        forbidden: "this api key doesn't allow use from this pc (check its restrictions in google's console)",
+      }[why] || `youtube said ${String(why).toLowerCase()}`);
+    }
+    return d;
+  },
+  map(v) {
+    const sn = v.snippet || {}, th = sn.thumbnails || {}, cd = v.contentDetails || {}, st = v.statistics || {};
+    const m = String(cd.duration || "").match(/P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/) || [];
+    const secs = (+m[1] || 0) * 86400 + (+m[2] || 0) * 3600 + (+m[3] || 0) * 60 + (+m[4] || 0);
+    const when = Date.parse(sn.publishedAt || "") || 0;
+    const pic = (th.maxres || th.standard || th.high || th.medium || th.default || {}).url || "";
+    return {
+      id: v.id, yt: true, kind: "video", title: sn.title || "", channel: sn.channelTitle || "", channelId: sn.channelId,
+      overview: sn.description || "", when, added: sn.publishedAt || "", runtime: secs, live: sn.liveBroadcastContent === "live",
+      views: +st.viewCount || 0, img: pic, thumb: (th.medium || th.high || {}).url || pic, hue: Emby.hashHue(v.id),
+    };
+  },
+  async trending() {
+    const d = await this.api("videos", { part: "snippet,contentDetails,statistics", chart: "mostPopular", regionCode: this.region(), maxResults: 50 });
+    return (d.items || []).map(v => this.map(v));
+  },
+  async search(q) { // (a search costs 100 of the 10,000 daily units; the details call after it, 1)
+    const s = await this.api("search", { part: "snippet", type: "video", q, maxResults: 50, regionCode: this.region() });
+    const ids = (s.items || []).map(i => i.id && i.id.videoId).filter(Boolean);
+    if (!ids.length) return [];
+    const d = await this.api("videos", { part: "snippet,contentDetails,statistics", id: ids.join(",") });
+    const by = new Map((d.items || []).map(v => [v.id, v]));
+    return ids.map(id => by.get(id)).filter(Boolean).map(v => this.map(v));
+  },
+  // where you stopped each video (YouTube doesn't share watch history with apps, so the app keeps its own)
+  positions() { try { return JSON.parse(localStorage.getItem("mc.ytpos") || "{}"); } catch { return {}; } },
+  posOf(id) { return this.positions()[id] || 0; },
+  setPos(id, secs) {
+    const all = this.positions();
+    if (secs > 0) all[id] = Math.floor(secs); else delete all[id];
+    const ids = Object.keys(all); if (ids.length > 300) ids.slice(0, ids.length - 300).forEach(k => delete all[k]);
+    try { localStorage.setItem("mc.ytpos", JSON.stringify(all)); } catch {}
+  },
+  // ----- your account ("enter this code" sign-in; the helper keeps the pass and hands out short-lived access) -----
+  signedIn: false, access: null, accessUntil: 0, feedCache: null,
+  async account() { const st = await Apps.call("/apps/youtube/account"); this.signedIn = !!(st && st.signed_in); return st; },
+  async token(force) {
+    if (!force && this.access && Date.now() / 1000 < this.accessUntil) return this.access;
+    const r = await Apps.call("/apps/youtube/token");
+    if (!r || !r.ok) { this.access = null; if (r && /not signed in|invalid/i.test(r.error || "")) this.signedIn = false; throw new Error("sign in to youtube with a code in settings → youtube"); }
+    this.access = r.token; this.accessUntil = r.until;
+    return r.token;
+  },
+  async mine(path, params, retry = true) {
+    const t = await this.token();
+    const r = await fetch(`https://www.googleapis.com/youtube/v3/${path}?` + new URLSearchParams(params), { headers: { Authorization: "Bearer " + t } });
+    if (r.status === 401 && retry) { await this.token(true); return this.mine(path, params, false); }
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error("youtube said " + String((d.error && (d.error.errors?.[0]?.reason || d.error.status)) || r.status).toLowerCase());
+    return d;
+  },
+  async details(ids) { // full details (length, views…) for a list of video ids, in their order
+    const out = new Map();
+    for (let i = 0; i < ids.length; i += 50) {
+      const d = await this.api("videos", { part: "snippet,contentDetails,statistics", id: ids.slice(i, i + 50).join(",") });
+      (d.items || []).forEach(v => out.set(v.id, this.map(v)));
+    }
+    return ids.map(id => out.get(id)).filter(Boolean);
+  },
+  async channels() { // the channels you subscribe to (up to 250)
+    const out = []; let page = "";
+    for (let n = 0; n < 5; n++) {
+      const d = await this.mine("subscriptions", { part: "snippet", mine: "true", maxResults: 50, order: "alphabetical", ...(page ? { pageToken: page } : {}) });
+      (d.items || []).forEach(s => {
+        const sn = s.snippet || {}, th = sn.thumbnails || {};
+        out.push({ id: sn.resourceId && sn.resourceId.channelId, name: sn.title || "", img: (th.high || th.medium || th.default || {}).url || "", hue: Emby.hashHue(sn.title || ""), ytChannel: true });
+      });
+      page = d.nextPageToken; if (!page) break;
+    }
+    return out.filter(c => c.id);
+  },
+  uploadsOf(channelId) { return "UU" + String(channelId).slice(2); }, // every channel's "uploads" playlist
+  async playlistIds(playlistId, max = 50, mine = false) {
+    const ids = []; let page = "";
+    while (ids.length < max) {
+      const params = { part: "contentDetails", playlistId, maxResults: Math.min(50, max - ids.length), ...(page ? { pageToken: page } : {}) };
+      const d = mine ? await this.mine("playlistItems", params) : await this.api("playlistItems", params);
+      (d.items || []).forEach(i => i.contentDetails && i.contentDetails.videoId && ids.push(i.contentDetails.videoId));
+      page = d.nextPageToken; if (!page) break;
+    }
+    return ids;
+  },
+  // latest uploads from everyone you subscribe to, newest first (kept for 10 minutes)
+  async feed() {
+    if (this.feedCache && Date.now() - this.feedCache.at < 10 * 60e3) return this.feedCache.list;
+    const chans = await this.channels(), recent = [];
+    let i = 0;
+    const worker = async () => {
+      while (i < chans.length) {
+        const c = chans[i++];
+        try {
+          const d = await this.api("playlistItems", { part: "contentDetails", playlistId: this.uploadsOf(c.id), maxResults: 4 });
+          (d.items || []).forEach(x => x.contentDetails && recent.push({ id: x.contentDetails.videoId, at: Date.parse(x.contentDetails.videoPublishedAt || "") || 0 }));
+        } catch { /* a channel without uploads */ }
+      }
+    };
+    await Promise.all(Array.from({ length: 8 }, worker));
+    recent.sort((a, b) => b.at - a.at);
+    const list = await this.details(recent.slice(0, 60).map(r => r.id));
+    this.feedCache = { at: Date.now(), list };
+    return list;
+  },
+  async playlists() {
+    const d = await this.mine("playlists", { part: "snippet,contentDetails", mine: "true", maxResults: 50 });
+    return (d.items || []).map(p => {
+      const sn = p.snippet || {}, th = sn.thumbnails || {};
+      return { id: p.id, playlist: true, kind: "video", title: sn.title || "", channel: sn.channelTitle || "", count: (p.contentDetails && p.contentDetails.itemCount) || 0,
+        thumb: (th.medium || th.high || th.default || {}).url || "", img: (th.high || th.medium || {}).url || "", when: Date.parse(sn.publishedAt || "") || 0, hue: Emby.hashHue(p.id) };
+    });
+  },
+  async playlistVideos(id) { return this.details(await this.playlistIds(id, 200, true)); },
+  async channelVideos(channelId) { return this.details(await this.playlistIds(this.uploadsOf(channelId), 50)); },
+  async liked() {
+    const d = await this.mine("videos", { part: "snippet,contentDetails,statistics", myRating: "like", maxResults: 50 });
+    return (d.items || []).map(v => this.map(v));
+  },
+  recent() { try { return JSON.parse(localStorage.getItem("mc.ytsearch") || "[]"); } catch { return []; } },
+  remember(q) { const l = [q, ...this.recent().filter(x => x.toLowerCase() !== q.toLowerCase())].slice(0, 8); try { localStorage.setItem("mc.ytsearch", JSON.stringify(l)); } catch {} },
+};
+const ago = t => {
+  const s = (Date.now() - t) / 1000;
+  for (const [n, w] of [[31536000, "year"], [2592000, "month"], [604800, "week"], [86400, "day"], [3600, "hour"], [60, "minute"]]) {
+    if (s >= n) { const k = Math.floor(s / n); return `${k} ${w}${k === 1 ? "" : "s"} ago`; }
+  }
+  return "just now";
+};
+const viewCount = n => n >= 1e9 ? (n / 1e9).toFixed(1).replace(/\.0$/, "") + "b views" : n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, "") + "m views" : n >= 1e3 ? Math.round(n / 1e3) + "k views" : n ? n + " views" : "";
+
+// a video tile: 16:9 thumbnail with its length (or LIVE), the title, then channel · views · age
+CELL.yt = v => el("div", "media video yt", `<div class="pic">${v.thumb ? imgTag(v.thumb) : `<span class="noimg"></span>`}${
+  v.playlist ? `<span class="len">${v.count} video${v.count === 1 ? "" : "s"}</span>` : v.live ? `<span class="len live">live</span>` : v.runtime ? `<span class="len">${fmtT(v.runtime)}</span>` : ""}${
+  Tube.posOf(v.id) && v.runtime ? `<span class="seen"><i style="width:${Math.min(100, Tube.posOf(v.id) / v.runtime * 100)}%"></i></span>` : ""}</div><div class="mcap"><b>${esc(v.title)}</b><span>${esc([v.channel, viewCount(v.views), v.when ? ago(v.when) : ""].filter(Boolean).join(" · "))}</span></div>`);
+ROW.yt = v => el("div", "r-media video", `<div class="pic">${v.thumb ? imgTag(v.thumb) : ""}</div><div class="tx"><div class="t1">${esc(v.title)}</div><div class="t2 sc">${
+  esc((v.playlist ? [`${v.count} videos`, v.channel] : [v.channel, v.live ? "live" : v.runtime ? fmtT(v.runtime) : "", viewCount(v.views), v.when ? ago(v.when) : ""]).filter(Boolean).join(" · "))}</div></div>`);
+VIEW_KINDS.yt = {
+  layouts: [["posters", "thumbnails"], ["list", "list"]],
+  sorts: [["date:desc", "newest first"], ["title:asc", "title a–z"]],
+  grid: { s: { cols: 6, w: 262, h: 214, gap: 22 }, m: { cols: 5, w: 318, h: 248, gap: 24 }, l: { cols: 3, w: 540, h: 372, gap: 30 } },
+  cell: CELL.yt, row: ROW.yt, rowH: { s: 96, m: 130, l: 180 },
+};
+
+// The YouTube section. Signed in (settings → youtube → sign in with a code): SUBSCRIPTIONS (newest
+// uploads from your channels), CHANNELS, PLAYLISTS and LIKED, then TRENDING and SEARCH.
+function youtubePage() {
+  const open = v => playYouTube(v);
+  const yours = Tube.signedIn ? [
+    { name: "subscriptions", load: () => Tube.feed(), views: { key: "youtube", kind: "yt" }, open, empty: "no new videos from your channels" },
+    { name: "channels", load: () => Tube.channels(), views: { key: "ytchannels", kind: "artist", sort: true }, open: c => go(ytChannelPage(c)), empty: "you don't subscribe to any channels yet" },
+    { name: "playlists", load: () => Tube.playlists(), views: { key: "youtube", kind: "yt" }, open: p => go(ytPlaylistPage(p)), empty: "you have no playlists" },
+    { name: "liked", load: () => Tube.liked(), views: { key: "youtube", kind: "yt" }, open, empty: "no liked videos" },
+  ] : [];
+  return new PivotPage({
+    title: "youtube", heroName: "youtube",
+    sections: [
+      ...yours,
+      { name: "trending", load: () => Tube.trending(), views: { key: "youtube", kind: "yt" }, open },
+      { name: "search", load: () => [{ search: true }, ...Tube.recent().map(q => ({ q }))], view: (items, f) => SearchView(items, f), open: x => x.search ? top().list.focusInput() : ytSearch(x.q) },
+    ],
+  });
+}
+const ytChannelPage = c => new PivotPage({
+  title: "youtube", subtitle: c.name, bg: c.img ? { src: c.img, opacity: 0.35 } : undefined,
+  sections: [{ name: "videos", load: () => Tube.channelVideos(c.id), views: { key: "youtube", kind: "yt" }, open: v => playYouTube(v), empty: "this channel has no videos" }],
+});
+const ytPlaylistPage = p => new PivotPage({
+  title: "youtube", subtitle: p.title,
+  sections: [{ name: "videos", load: () => Tube.playlistVideos(p.id), views: { key: "youtube", kind: "yt" }, open: v => playYouTube(v), empty: "this playlist is empty" }],
+});
+
+/* ---------- "enter this code": signing in to your YouTube account on the TV ----------
+   Big and simple, like other TV apps: go to google.com/device on your phone, enter the code. The
+   screen notices by itself when you're done. */
+class YtCodePage extends Page {
+  get titleKey() { return "youtube"; }
+  render() {
+    const r = el("div", "sub-page yt-code");
+    r.innerHTML = `<div class="sec-title z">youtube</div>
+      <div class="ytc-step zs sc">sign in to your youtube account</div>
+      <div class="ytc-how first t">on your phone or computer, go to</div>
+      <div class="ytc-url t"></div>
+      <div class="ytc-how t">and enter this code</div>
+      <div class="ytc-code t">· · · ·</div>
+      <div class="ytc-state t sc">getting a code…</div>`;
+    return r;
+  }
+  q(s) { return this.el.querySelector(s); }
+  async mounted() { this.start(); }
+  async start() {
+    this.q(".ytc-state").textContent = "getting a code…";
+    const r = await Apps.call("/apps/youtube/code", {});
+    if (!this.el) return;
+    if (r.server === false) { this.q(".ytc-state").textContent = "the helper isn't running — start the app with “Start Media Center”"; return; }
+    if (!r.ok) { this.q(".ytc-state").textContent = lower(r.error || "google didn't give a code"); return; }
+    this.q(".ytc-url").textContent = String(r.url || "google.com/device").replace(/^https?:\/\/(www\.)?/, "");
+    const code = this.q(".ytc-code");
+    code.textContent = r.code;
+    code.animate([{ opacity: 0, transform: "scale(.9)" }, { opacity: 1, transform: "none" }], { duration: 500, easing: EASE });
+    this.q(".ytc-state").textContent = "waiting for you to sign in…";
+    clearInterval(this.timer);
+    this.timer = setInterval(() => this.check(), 3000);
+  }
+  async check() {
+    const st = await Apps.call("/apps/youtube/account");
+    if (!this.el) return;
+    if (st.state === "signed_in") {
+      clearInterval(this.timer);
+      Tube.signedIn = true; Tube.feedCache = null;
+      this.q(".ytc-state").textContent = "signed in";
+      toast("signed in to youtube");
+      setTimeout(() => { if (top() === this) back(); }, 900);
+    } else if (st.state === "denied" || st.state === "expired" || st.state === "error") {
+      clearInterval(this.timer);
+      this.q(".ytc-state").textContent = (st.state === "denied" ? "sign-in was declined" : st.state === "expired" ? "that code ran out" : lower(st.error || "something went wrong")) + " — press enter for a new code";
+      this.retry = true;
+    }
+  }
+  unmount() { clearInterval(this.timer); super.unmount(); }
+  key(k) {
+    if (k === "ok" && this.retry) { this.retry = false; this.start(); return true; }
+    return k !== "back";
+  }
+}
+function ytSearch(q) {
+  q = String(q || "").trim(); if (!q) return;
+  Tube.remember(q);
+  go(new PivotPage({
+    title: "youtube", subtitle: `“${q}”`,
+    sections: [{ name: "results", load: () => Tube.search(q), views: { key: "youtube", kind: "yt" }, open: v => playYouTube(v), empty: "nothing found" }],
+  }));
+}
+// the search box (Enter on it to type, Enter again to search), with your recent searches under it
+function SearchView(items, focus) {
+  let input;
+  const row = x => {
+    if (!x.search) return el("div", "r-recent", `<span class="ic">↺</span><span class="t1">${esc(x.q)}</span>`);
+    const r = el("div", "r-search", `<span class="ic">⌕</span>`);
+    input = el("input", "yt-q"); Object.assign(input, { type: "text", placeholder: "search youtube", spellcheck: false, autocomplete: "off", tabIndex: -1 });
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); const q = input.value; input.blur(); ytSearch(q); }
+      else if (e.key === "Escape" || e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); e.stopPropagation(); input.blur(); }
+    });
+    r.append(input);
+    return r;
+  };
+  const L = List({ items, itemH: 96, row, focus });
+  L.focusInput = () => { input.focus(); input.select(); };
+  return L;
+}
+
 /* ============ youtube (VacuumTube, started by the Media Center helper) ============ */
 const Apps = {
   async call(path, body) {
@@ -1563,11 +1841,12 @@ async function openShow(show) {
 
 class VideoPage extends Page {
   constructor(v) { super(); this.v = v; this.f = 0; }
-  get titleKey() { return this.v.home ? "home videos" : this.v.type === "Episode" ? "tv shows" : "movies"; }
+  get titleKey() { return this.v.rec ? "recordings" : this.v.home ? "home videos" : this.v.type === "Episode" ? "tv shows" : "movies"; }
   render() {
-    const v = this.v, ep = v.type === "Episode";
+    const v = this.v, ep = v.type === "Episode" && !v.rec;
     const r = el("div", "video-page" + (ep ? " ep" : ""));
-    const meta = ep
+    const meta = v.rec ? [v.ep, v.recording ? "recording now" : "", v.channel, v.when ? homeDate(v) : "", v.runtime ? fmtLong(v.runtime) : "", v.played ? "watched" : ""]
+      : ep
       ? [v.seriesName, `season ${v.season || "?"} · episode ${v.episode || "?"}`, v.runtime ? fmtLong(v.runtime) : ""]
       : [v.year, v.runtime ? fmtLong(v.runtime) : "", v.rating, v.score ? `★ ${v.score}` : ""];
     // giant title stays the section ("MOVIES" / "TV SHOWS"); the movie or episode name sits under it in bold caps
@@ -1582,6 +1861,7 @@ class VideoPage extends Page {
     this.btnEls = [];
     if (v.resume > 60) this.btnEls.push(el("div", "btn", `resume ${fmtLong(v.resume)}`));
     this.btnEls.push(el("div", "btn", v.resume > 60 ? "from start" : "play"));
+    if (v.rec) { const d = el("div", "btn", "delete"); d.dataset.id = "delete"; this.btnEls.push(d); }
     btns.append(...this.btnEls); info.append(btns);
     r.append(info);
     this.paint();
@@ -1590,9 +1870,19 @@ class VideoPage extends Page {
   paint() { this.btnEls.forEach((b, i) => b.classList.toggle("focus", i === this.f)); }
   bg() { return { src: this.v.backdrop || this.v.img || null, opacity: 0.45 }; }
   key(k) {
-    if (k === "left" || k === "right") { this.f = clamp(this.f + (k === "left" ? -1 : 1), 0, this.btnEls.length - 1); this.paint(); return true; }
+    if (k === "left" || k === "right") {
+      this.f = clamp(this.f + (k === "left" ? -1 : 1), 0, this.btnEls.length - 1);
+      if (this.sure) { this.sure = false; const d = this.btnEls.find(x => x.dataset.id === "delete"); if (d) { d.textContent = "delete"; d.classList.remove("danger"); } }
+      this.paint(); return true;
+    }
     if (k === "ok") {
       if (!Emby.connected) { toast("sign in to emby in settings to play this"); return true; }
+      const b = this.btnEls[this.f];
+      if (b.dataset.id === "delete") { // press twice: the first press asks
+        if (!this.sure) { this.sure = true; b.textContent = "press enter again to delete"; b.classList.add("danger"); return true; }
+        Emby.deleteItem(this.v.id).then(() => { DVR.touch(); toast(`deleted ${this.v.title}`); if (top() === this) back(); }, e => toast(DVR.why(e, "delete it")));
+        return true;
+      }
       const resume = this.v.resume > 60 && this.f === 0; // "resume 42m" is the first button when there's a place to go back to
       go(new VodPage(this.v, resume ? this.v.resume : 0));
       return true;
@@ -1662,6 +1952,11 @@ class GuidePage extends Page {
     return r;
   }
   mounted() {
+    if (this.channels && this.dvrSeen !== DVR.changed) { // recordings changed while you were away: refresh the marks
+      this.dvrSeen = DVR.changed;
+      if (this.live) { this.progs.clear(); this.pending && this.pending.clear(); this.ensurePrograms(); }
+    }
+    this.dvrSeen = DVR.changed;
     if (this.channels === undefined) {
       this.msg.textContent = "loading the guide…";
       Promise.resolve().then(() => this.live ? Emby.channels() : SampleGuide.channels())
@@ -1733,8 +2028,10 @@ class GuidePage extends Page {
       } else for (const p of ps) {
         if (p.end <= this.T0 || p.start >= this.T0 + G.ahead) continue;
         const s = Math.max(p.start, this.T0), e = Math.min(p.end, this.T0 + G.ahead);
-        const cell = el("div", "gd-cell" + (p === focusP && i === this.ci ? " focus" : "") + (p.start <= now && p.end > now ? " on" : ""),
-          `<div class="pt">${esc(p.title)}</div><div class="ps">${esc(p.ep || clock12(p.start))}${p.isNew ? ` <b>new</b>` : ""}</div>`);
+        const onAir = p.start <= now && p.end > now;
+        const mark = p.timerId ? (onAir ? `<span class="recmark now">rec</span>` : `<span class="recmark${p.seriesTimerId ? " series" : ""}"></span>`) : "";
+        const cell = el("div", "gd-cell" + (p === focusP && i === this.ci ? " focus" : "") + (onAir ? " on" : "") + (p.timerId ? " rec" : ""),
+          `${mark}<div class="pt">${esc(p.title)}</div><div class="ps">${esc(p.ep || clock12(p.start))}${p.isNew ? ` <b>new</b>` : ""}</div>`);
         cell.style.left = gx(s - this.T0) + "px";
         cell.style.width = Math.max(8, gx(e - s) - 6) + "px";
         // keep the title readable when the show began before the visible window
@@ -1832,15 +2129,27 @@ class ProgramPage extends Page {
     info.append(el("div", "overview t", esc((p && p.overview) || "no description.")));
     const flags = p ? [p.isNew ? "new" : "", p.isLive ? "live" : "", p.isMovie ? "movie" : "", ...(p.genres || []).slice(0, 3)].filter(Boolean) : [];
     if (flags.length) info.append(el("div", "genres t", esc(flags.join(" · ").toLowerCase())));
-    const btns = el("div", "btn-row t");
+    this.btnRow = el("div", "btn-row t"); info.append(this.btnRow);
+    this.renderButtons();
+    r.append(info);
+    return r;
+  }
+  // watch · record (or don't record) · record series (or series options) · back
+  renderButtons() {
+    const { ch, p } = this, now = Date.now(), onNow = p && p.start <= now && p.end > now, watching = Live.isOn(ch);
     const list = [["watch", onNow || !p || watching ? "watch" : `watch ${ch.name} now`]];
     if (watching) list.push(["stop", "stop"]);
+    if (p && p.end > now && Emby.connected) {
+      list.push(["rec", p.timerId ? "don't record" : onNow ? "record the rest" : "record"]);
+      if (p.isSeries || p.seriesTimerId) list.push(["series", p.seriesTimerId ? "series options" : "record series"]);
+    }
     list.push(["back", "back"]);
-    this.btnEls = list.map(([id, label]) => { const b = el("div", "btn", esc(label)); b.dataset.id = id; return b; });
-    btns.append(...this.btnEls); info.append(btns);
-    r.append(info);
+    const keep = this.btnEls && this.btnEls[this.f] && this.btnEls[this.f].dataset.id;
+    this.btnEls = list.map(([id, label]) => { const b = el("div", "btn" + (id === "rec" && p && p.timerId ? " rec-on" : ""), esc(label)); b.dataset.id = id; return b; });
+    this.btnRow.innerHTML = ""; this.btnRow.append(...this.btnEls);
+    if (keep) this.f = Math.max(0, this.btnEls.findIndex(b => b.dataset.id === keep));
+    this.f = clamp(this.f, 0, this.btnEls.length - 1);
     this.paint();
-    return r;
   }
   paint() { this.btnEls.forEach((b, i) => b.classList.toggle("focus", i === this.f)); }
   bg() { return { src: (this.p && this.p.img) || null, opacity: 0.3 }; }
@@ -1850,11 +2159,218 @@ class ProgramPage extends Page {
       const id = this.btnEls[this.f].dataset.id;
       if (id === "back") { back(); return true; }
       if (id === "stop") { Live.stop(); toast("stopped " + this.ch.name); back(); return true; }
+      if (id === "rec") { DVR.toggle(this.p).then(() => this.el && this.renderButtons()); return true; }
+      if (id === "series") {
+        if (this.p.seriesTimerId) go(new SeriesPage(this.p.seriesTimerId));
+        else DVR.series(this.p).then(() => this.el && this.renderButtons());
+        return true;
+      }
       if (!Emby.connected) { toast("sign in to emby in settings to watch live tv"); return true; }
       go(new LivePage(this.guide, this.guide.channels.indexOf(this.ch)), { replace: true }); // Back from the TV returns to the guide
       return true;
     }
     return false;
+  }
+}
+
+/* ============ recording (Emby's DVR) ============
+   Emby does the recording; the app schedules, shows and plays. From the guide: record one airing or
+   a whole series (series options: new episodes only, any channel, how many to keep). The RECORDINGS
+   menu has recent · shows · movies · scheduled · series. */
+const DVR = {
+  changed: 0, // bumped whenever something is scheduled, cancelled or deleted (lists then reload)
+  touch() { this.changed = Date.now(); quick.key = null; quick.rows = null; }, // (the history shelf reloads too)
+  why(e, doing) {
+    if (e && (e.status === 401 || e.status === 403)) return "this emby account isn't allowed to manage recordings — in emby: dashboard → users → (you) → allow managing live tv recordings";
+    return `couldn't ${doing} — ` + lower((e && e.message) || "unknown problem");
+  },
+  // after a change, ask Emby what's now set for this show
+  async sync(p) {
+    const t = (await Emby.timers()).find(t => t.programId === p.id);
+    p.timerId = t ? t.id : null;
+    if (t && t.seriesTimerId) p.seriesTimerId = t.seriesTimerId;
+  },
+  async toggle(p) {
+    if (!p) return;
+    try {
+      if (p.timerId) {
+        await Emby.cancelTimer(p.timerId); p.timerId = null;
+        toast(`won't record ${p.title}`);
+      } else {
+        await Emby.record(p.id); await this.sync(p);
+        const now = Date.now();
+        toast(p.start <= now ? `recording ${p.title}` : `will record ${p.title} · ${clock12(p.start)}`);
+      }
+      this.touch();
+    } catch (e) { toast(this.why(e, "change the recording")); }
+  },
+  async series(p) {
+    try {
+      await Emby.recordSeries(p.id, { RecordNewOnly: true, RecordAnyChannel: false });
+      await this.sync(p);
+      if (!p.seriesTimerId) { const st = (await Emby.seriesTimers()).find(s => s.title === p.title); if (st) p.seriesTimerId = st.id; }
+      toast(`recording new episodes of ${p.title}`);
+      this.touch();
+    } catch (e) { toast(this.why(e, "record the series")); }
+  },
+};
+
+// a recording tile: thumbnail with its length (or a red REC while it's still recording), title, then episode / channel · date
+CELL.rec = x => el("div", "media video rec", `<div class="pic">${x.thumb || x.img ? imgTag(x.thumb || x.img) : `<span class="noimg"></span>`}${
+  x.group ? `<span class="len">${x.count} recording${x.count === 1 ? "" : "s"}</span>` : x.recording ? `<span class="len live">rec</span>` : x.runtime ? `<span class="len">${fmtT(x.runtime)}</span>` : ""}${
+  !x.group && x.resume && x.runtime ? `<span class="seen"><i style="width:${Math.min(100, x.resume / x.runtime * 100)}%"></i></span>` : ""}</div><div class="mcap"><b>${esc(x.title)}</b><span>${
+  esc(x.group ? (x.newest ? "newest " + ago(x.newest) : "") : [x.ep, x.channel, x.when ? homeDate(x) : "", x.played ? "watched" : ""].filter(Boolean).join(" · "))}</span></div>`);
+ROW.rec = x => el("div", "r-media video", `<div class="pic">${x.thumb || x.img ? imgTag(x.thumb || x.img) : ""}</div><div class="tx"><div class="t1">${esc(x.ep && !x.group ? `${x.title} · ${x.ep}` : x.title)}</div><div class="t2 sc">${
+  esc(x.group ? `${x.count} recordings` : [x.recording ? "recording now" : "", x.channel, x.when ? homeDate(x) : "", x.runtime ? fmtLong(x.runtime) : "", x.played ? "watched" : x.resume > 60 ? "in progress" : ""].filter(Boolean).join(" · "))}</div></div>`);
+VIEW_KINDS.rec = {
+  layouts: [["posters", "thumbnails"], ["list", "list"]],
+  sorts: [["date:desc", "newest first"], ["date:asc", "oldest first"], ["title:asc", "name a–z"]],
+  grid: { s: { cols: 6, w: 262, h: 214, gap: 22 }, m: { cols: 5, w: 318, h: 248, gap: 24 }, l: { cols: 3, w: 540, h: 372, gap: 30 } },
+  cell: CELL.rec, row: ROW.rec, rowH: { s: 96, m: 130, l: 180 },
+};
+// scheduled recordings and series rules, as text rows
+const dayWord = t => {
+  const d = new Date(t), today = new Date(); today.setHours(0, 0, 0, 0);
+  const diff = Math.round((new Date(d).setHours(0, 0, 0, 0) - today) / 864e5);
+  return diff === 0 ? (d.getHours() >= 17 ? "tonight" : "today") : diff === 1 ? "tomorrow" : d.toLocaleDateString([], { weekday: "long" }).toLowerCase();
+};
+ROW.timer = t => el("div", "r-media", `<div class="pic">${t.img ? imgTag(t.img) : ""}</div><div class="tx"><div class="t1">${esc(t.title)}${t.ep ? ` · ${esc(t.ep)}` : ""}</div><div class="t2 sc">${
+  esc([t.status === "InProgress" ? "recording now" : `${dayWord(t.start)} ${clock12(t.start)}`, t.channel, t.seriesTimerId ? "series" : ""].filter(Boolean).join(" · "))}</div></div>`);
+ROW.series = s => el("div", "r-media", `<div class="pic">${s.img ? imgTag(s.img) : ""}</div><div class="tx"><div class="t1">${esc(s.title)}</div><div class="t2 sc">${
+  esc([s.newOnly ? "new episodes" : "all airings", s.anyChannel ? "any channel" : s.channel, s.keep ? `keeps ${s.keep}` : "keeps all"].filter(Boolean).join(" · "))}</div></div>`);
+
+// what Enter does on a recording: part-watched or finished ones show their page (resume / start / delete); others play
+function playRecording(x) {
+  if (x.group) return go(recShowPage(x));
+  go(new VideoPage(x));
+}
+function recordingsPage() {
+  let all = null;
+  const load = () => (all = all || Emby.recordings());
+  const page = new PivotPage({
+    title: "recordings", heroName: "recordings",
+    sections: [
+      { name: "recent", load, views: { key: "recordings", kind: "rec", sort: true }, open: playRecording, empty: "nothing recorded yet — record from the tv guide" },
+      {
+        name: "shows", views: { key: "recordings", kind: "rec", sort: true }, open: playRecording, empty: "no recorded shows yet",
+        load: async () => {
+          const by = new Map();
+          for (const r of await load()) if (!r.isMovie && r.seriesName) {
+            if (!by.has(r.seriesName)) by.set(r.seriesName, []);
+            by.get(r.seriesName).push(r);
+          }
+          return [...by].map(([name, eps]) => ({ id: "show:" + name, group: true, title: name, eps, count: eps.length, newest: eps[0].when, when: eps[0].when, thumb: eps[0].thumb, img: eps[0].img }));
+        },
+      },
+      { name: "movies", load: async () => (await load()).filter(r => r.isMovie), views: { key: "recordings", kind: "rec", sort: true }, open: playRecording, empty: "no recorded movies yet" },
+      { name: "scheduled", load: () => Emby.timers(), view: listView(130, ROW.timer), open: t => go(new TimerPage(t)), empty: "nothing scheduled — record from the tv guide" },
+      { name: "series", load: () => Emby.seriesTimers(), view: listView(130, ROW.series), open: s => go(new SeriesPage(s.id)), empty: "no series set to record" },
+    ],
+  });
+  // back from a recording that was deleted, or after scheduling something: the lists reload
+  page.stale = () => { const c = page.dvrSeen !== DVR.changed; page.dvrSeen = DVR.changed; if (c) all = null; return c; };
+  return page;
+}
+const recShowPage = g => new PivotPage({
+  title: "recordings", subtitle: g.title, bg: g.img ? { src: g.img, opacity: 0.35 } : undefined,
+  sections: [{ name: "episodes", load: () => g.eps, views: { key: "recordings", kind: "rec", sort: true }, open: playRecording, empty: "no recordings" }],
+});
+
+/* ---------- small pages: one scheduled recording, and a series' options ---------- */
+class TimerPage extends Page {
+  constructor(t) { super(); this.t = t; this.f = 0; }
+  get titleKey() { return "recordings"; }
+  render() {
+    const t = this.t, r = el("div", "sub-page action-page");
+    r.append(el("div", "sec-title z", "recordings"),
+      el("div", "alb-head zs", `<div class="an">${esc(t.title)}</div><div class="sc">${esc([t.ep, `${dayWord(t.start)} ${clock12(t.start)} – ${clock12(t.end)}`, t.channel].filter(Boolean).join(" · "))}</div>`));
+    const btns = el("div", "btn-row t act-btns");
+    this.btnEls = [["cancel", t.seriesTimerId ? "skip this one" : "don't record"], ...(t.seriesTimerId ? [["series", "series options"]] : []), ["back", "back"]]
+      .map(([id, label]) => { const b = el("div", "btn", esc(label)); b.dataset.id = id; return b; });
+    btns.append(...this.btnEls); r.append(btns);
+    this.paint();
+    return r;
+  }
+  paint() { this.btnEls.forEach((b, i) => b.classList.toggle("focus", i === this.f)); }
+  bg() { return { src: this.t.img || null, opacity: 0.3 }; }
+  key(k) {
+    if (k === "left" || k === "right") { this.f = clamp(this.f + (k === "left" ? -1 : 1), 0, this.btnEls.length - 1); this.paint(); return true; }
+    if (k !== "ok") return false;
+    const id = this.btnEls[this.f].dataset.id;
+    if (id === "back") back();
+    else if (id === "series") go(new SeriesPage(this.t.seriesTimerId));
+    else if (id === "cancel") this.cancel();
+    return true;
+  }
+  async cancel() {
+    try { await Emby.cancelTimer(this.t.id); DVR.touch(); toast(`won't record ${this.t.title}`); if (top() === this) back(); }
+    catch (e) { toast(DVR.why(e, "cancel it")); }
+  }
+}
+class SeriesPage extends Page {
+  constructor(id) { super(); this.id = id; this.f = 0; this.st = null; }
+  get titleKey() { return "recordings"; }
+  render() {
+    const r = el("div", "sub-page action-page");
+    r.append(el("div", "sec-title z", "recordings"), this.head = el("div", "alb-head zs", `<div class="an">series</div><div class="sc">loading…</div>`));
+    this.body = el("div", "act-body"); r.append(this.body);
+    if (this.st) this.build();
+    return r;
+  }
+  async mounted() {
+    if (this.st) return;
+    try { this.st = (await Emby.seriesTimers()).find(s => s.id === this.id); } catch (e) { toast(DVR.why(e, "load the series")); }
+    if (!this.el) return;
+    if (!this.st) { this.head.querySelector(".sc").textContent = "this series isn't set to record any more"; return; }
+    this.build();
+    turnIn(visibleT(this.body), 1, { stagger: 40 });
+  }
+  options() {
+    const raw = this.st.raw;
+    return [
+      { id: "new", label: "episodes", value: raw.RecordNewOnly ? "new ones only" : "every airing", toggle: () => { raw.RecordNewOnly = !raw.RecordNewOnly; } },
+      { id: "chan", label: "channel", value: raw.RecordAnyChannel ? "any channel" : (raw.ChannelName || "this channel"), toggle: () => { raw.RecordAnyChannel = !raw.RecordAnyChannel; } },
+      { id: "keep", label: "keep", value: raw.KeepUpTo ? `the last ${raw.KeepUpTo}` : "all of them", toggle: () => { const k = [0, 5, 10, 20]; raw.KeepUpTo = k[(k.indexOf(raw.KeepUpTo || 0) + 1) % k.length]; } },
+    ];
+  }
+  build() {
+    this.head.innerHTML = `<div class="an">${esc(this.st.title)}</div><div class="sc">series recording · enter changes an option</div>`;
+    this.body.innerHTML = "";
+    this.items = this.options().map(o => {
+      const row = el("div", "opt-row t", `<div class="lab">${esc(o.label)}</div><div class="btn">${esc(o.value)}</div>`);
+      row.opt = o; this.body.append(row); return row;
+    });
+    const btns = el("div", "btn-row t act-btns");
+    for (const [id, label] of [["stop", "stop recording this series"], ["back", "back"]]) {
+      const b = el("div", "btn", esc(label)); b.dataset.id = id; btns.append(b); this.items.push(b);
+    }
+    this.body.append(btns);
+    this.paint();
+  }
+  paint() { (this.items || []).forEach((e, i) => e.classList.toggle("focus", i === this.f)); }
+  bg() { return { src: (this.st && this.st.img) || null, opacity: 0.3 }; }
+  // ↑ ↓ move through the options and then the buttons; Enter (or ← →) changes an option
+  key(k) {
+    if (!this.items) return k !== "back";
+    const it = this.items[this.f];
+    if (k === "up" || k === "down") { this.f = clamp(this.f + (k === "up" ? -1 : 1), 0, this.items.length - 1); this.paint(); return true; }
+    if (it.opt && (k === "ok" || k === "left" || k === "right")) { this.change(it.opt); return true; }
+    if (!it.opt && (k === "left" || k === "right")) { const j = this.f + (k === "left" ? -1 : 1); if (this.items[j] && !this.items[j].opt) { this.f = j; this.paint(); } return true; }
+    if (k === "ok") {
+      if (it.dataset.id === "back") back();
+      else if (it.dataset.id === "stop") this.stop();
+      return true;
+    }
+    return k !== "back";
+  }
+  async change(opt) {
+    opt.toggle();
+    const f = this.f; this.build(); this.f = f; this.paint();
+    try { await Emby.updateSeries(this.st.raw); DVR.touch(); } catch (e) { toast(DVR.why(e, "change the series")); }
+  }
+  async stop() {
+    try { await Emby.cancelSeries(this.st.id); DVR.touch(); toast(`stopped recording ${this.st.title}`); if (top() === this) back(); }
+    catch (e) { toast(DVR.why(e, "stop the series")); }
   }
 }
 
@@ -2338,7 +2854,7 @@ const CC = {
     this.render();
   },
   render() {
-    const p = top(), box = p instanceof LivePage && !(p instanceof VodPage) && p.el ? p.q(".lv-cc") : null;
+    const p = top(), box = p instanceof LivePage && !(p instanceof VodPage) && !(p instanceof YtPage) && p.el ? p.q(".lv-cc") : null;
     if (!box) return;
     const cues = this.on && this.track && this.track.activeCues ? [...this.track.activeCues] : [];
     const text = cues.map(c => String(c.text || "").replace(/<[^>]+>/g, "")).join("\n").trim();
@@ -2356,7 +2872,7 @@ const CC = {
     }
   },
 };
-setInterval(() => { if (top() instanceof LivePage && !(top() instanceof VodPage)) CC.tick(); }, 400);
+setInterval(() => { const p = top(); if (p instanceof LivePage && !(p instanceof VodPage) && !(p instanceof YtPage)) CC.tick(); }, 400);
 
 /* ============ watching live tv (full screen) ============
    Player controls work like Kodi's on-screen display, in the Zune style:
@@ -2373,6 +2889,7 @@ const PLAYER_BUTTONS = [
   ["ff", "fwd 30s", `<svg viewBox="0 0 24 24"><path d="M5 6l8 6-8 6zm8 0 8 6-8 6z"/></svg>`],
   ["chup", "ch +", `<svg viewBox="0 0 24 24"><path d="M7.4 15.4 12 10.8l4.6 4.6L18 14l-6-6-6 6z"/></svg>`],
   ["stop", "stop", `<svg viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>`],
+  ["rec", "record", `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6"/></svg>`], // record the show that's on (Emby's DVR)
   ["info", "info", `<svg viewBox="0 0 24 24"><path d="M11 10h2v7h-2zm0-3h2v2h-2z"/></svg>`],
   ["cc", "captions", `<svg viewBox="0 0 24 24"><path d="M3 5h18v14H3zm2 2v10h14V7zm2.5 2.5h3v1.3h-1.7v2.4h1.7v1.3h-3zm5 0h3v1.3h-1.7v2.4h1.7v1.3h-3z"/></svg>`], // closed captions on / off
   ["dual", "pip", `<svg viewBox="0 0 24 24"><path d="M2 6h9v12H2zm11 0h9v12h-9zM4 8v8h5V8z"/></svg>`], // picture in picture
@@ -2464,7 +2981,9 @@ class LivePage extends Page {
     this.q(".lv-ch").textContent = `${ch.number}  ${ch.name}`;
     this.q(".lv-title").textContent = p ? p.title : ch.name;
     const where = lag ? `${fmt(lag)} behind live` : "live";
-    this.q(".lv-sub").textContent = [p && p.ep, where, Live.video.paused && Live.active ? "paused" : ""].filter(Boolean).join(" · ");
+    this.q(".lv-sub").innerHTML = [p && p.timerId ? `<b class="recdot">● rec</b>` : "", ...[p && p.ep, where, Live.video.paused && Live.active ? "paused" : ""].filter(Boolean).map(esc)].filter(Boolean).join(" · ");
+    const rec = this.btnEls.find(b => b.dataset.id === "rec");
+    if (rec) { rec.querySelector(".lbl").textContent = p && p.timerId ? "recording" : "record"; rec.classList.toggle("recording", !!(p && p.timerId)); }
     this.q(".lv-ov div").textContent = (p && p.overview) || "no description.";
     this.q(".lv-times .a").textContent = p ? clock12(p.start) : "";
     this.q(".lv-times .b").textContent = p ? clock12(p.end) : "";
@@ -2626,6 +3145,12 @@ class LivePage extends Page {
     }
     else if (id === "dual") { this.setMode("hidden"); Dual.pick(); return; }
     else if (id === "cc") { CC.set(!CC.on); toast(CC.on ? "captions on" : "captions off"); }
+    else if (id === "rec") {
+      const p = this.current();
+      if (!p) toast("there's no guide information for this show, so it can't be recorded from here");
+      else if (!Emby.connected) toast("sign in to emby to record");
+      else DVR.toggle(p).then(() => this.el && this.fill());
+    }
     this.fill();
   }
   // skip back / ahead 30 seconds within what the server has buffered; past "now" snaps back to live
@@ -2741,7 +3266,8 @@ class VodPage extends LivePage {
     v.play().catch(() => {});
     Emby.report("start", info, from, false);
     clearInterval(this.reportTimer);
-    this.reportTimer = setInterval(() => Emby.report("progress", info, v.currentTime, v.paused), 10000);
+    // every 2 seconds: Emby (and plugins like ComSkipper) act on where you are, so a skip lands right as the break starts
+    this.reportTimer = setInterval(() => Emby.report("progress", info, v.currentTime, v.paused), 2000);
   }
   // Playback broke (Edge couldn't decode the file, or the stream fell over): close that attempt and
   // pick up from the same spot (a couple of seconds back) with Emby converting the video. It only
@@ -2777,10 +3303,10 @@ class VodPage extends LivePage {
   get dur() { const d = this.video.duration; return isFinite(d) && d > 0 ? d : (this.info && this.info.dur) || this.v.runtime || 0; }
   fill() {
     if (!this.el) return;
-    const v = this.v, ep = v.type === "Episode", pos = this.video.currentTime || 0, d = this.dur;
-    this.q(".lv-ch").textContent = ep ? (v.seriesName || "tv shows") : v.home ? ["home video", homeDate(v)].filter(Boolean).join("  ") : ["movie", v.year].filter(Boolean).join("  ");
+    const v = this.v, ep = v.type === "Episode" && !v.rec, pos = this.video.currentTime || 0, d = this.dur;
+    this.q(".lv-ch").textContent = v.rec ? ["recorded", v.channel, v.when ? homeDate(v) : ""].filter(Boolean).join("  ") : ep ? (v.seriesName || "tv shows") : v.home ? ["home video", homeDate(v)].filter(Boolean).join("  ") : ["movie", v.year].filter(Boolean).join("  ");
     this.q(".lv-title").textContent = v.title;
-    this.q(".lv-sub").textContent = [ep ? `season ${v.season || "?"} · episode ${v.episode || "?"}` : v.rating, this.video.paused && this.info ? "paused" : ""].filter(Boolean).join(" · ");
+    this.q(".lv-sub").textContent = [v.rec ? v.ep : ep ? `season ${v.season || "?"} · episode ${v.episode || "?"}` : v.rating, v.recording ? "still recording" : "", this.video.paused && this.info ? "paused" : ""].filter(Boolean).join(" · ");
     this.q(".lv-ov div").textContent = v.overview || "no description.";
     this.q(".lv-times .a").textContent = fmtT(pos);
     this.q(".lv-times .b").textContent = d ? "-" + fmtT(Math.max(0, d - pos)) : "";
@@ -2804,6 +3330,13 @@ class VodPage extends LivePage {
     v.currentTime = clamp(v.currentTime + by, 0, Math.max(0, d - 1));
     this.glyph(by < 0 ? `−${-by}` : `+${by}`);
     this.peek();
+  }
+  // jump to an exact time (Emby remote control — e.g. ComSkipper jumping over a commercial)
+  seekTo(t) {
+    const v = this.video, d = this.dur;
+    v.currentTime = clamp(t, 0, d ? Math.max(0, d - 1) : t);
+    this.peek();
+    if (this.info) Emby.report("progress", this.info, v.currentTime, v.paused);
   }
   press(id) {
     if (id === "play") return this.togglePause();
@@ -2848,6 +3381,197 @@ class VodPage extends LivePage {
   }
 }
 
+/* ============ watching a youtube video ============
+   YouTube's own embedded player, full screen, with its controls hidden and the app's Zune-style ones
+   on top (same keys as movies). It picks up where you left off, and remembers your place. Videos
+   whose owners don't allow playback outside YouTube offer VacuumTube instead. */
+const YTApi = {
+  ready: null,
+  load() {
+    if (this.ready) return this.ready;
+    this.ready = new Promise((res, rej) => {
+      if (window.YT && window.YT.Player) return res(window.YT);
+      window.onYouTubeIframeAPIReady = () => res(window.YT);
+      const s = document.createElement("script");
+      s.src = "https://www.youtube.com/iframe_api";
+      s.onerror = () => { this.ready = null; rej(new Error("youtube's player didn't load")); };
+      document.head.append(s);
+    });
+    return this.ready;
+  },
+};
+const YT_BUTTONS = [
+  VOD_BUTTONS.find(b => b[0] === "start"), VOD_BUTTONS.find(b => b[0] === "rw"), ["play", "pause", ""],
+  VOD_BUTTONS.find(b => b[0] === "ff"), PLAYER_BUTTONS.find(b => b[0] === "cc"),
+  VOD_BUTTONS.find(b => b[0] === "stop"), VOD_BUTTONS.find(b => b[0] === "info"),
+];
+const YT_PLAY = YT_BUTTONS.findIndex(b => b[0] === "play");
+function playYouTube(v) { go(new YtPage(v)); }
+
+class YtPage extends LivePage {
+  constructor(v) { super({ channels: [] }, 0); this.v = v; this.bi = YT_PLAY; }
+  get ch() { return null; }
+  get titleKey() { return null; }
+  buttons() { return YT_BUTTONS; }
+  render() {
+    const r = super.render();
+    r.classList.add("vod-page", "yt-page");
+    this.host = el("div", "yt-host"); this.host.append(el("div", "yt-frame"));
+    r.prepend(this.host);
+    return r;
+  }
+  async mounted() {
+    Live.stop();
+    if (Player.playing) Player.toggle(); // music pauses while a video plays
+    this.status("starting…");
+    let api;
+    try { api = await YTApi.load(); } catch (e) { if (this.el) this.status(lower(e.message)); return; }
+    if (!this.el) return;
+    const from = Tube.posOf(this.v.id);
+    this.player = new api.Player(this.host.querySelector(".yt-frame"), {
+      videoId: this.v.id, width: 1920, height: 1080,
+      playerVars: {
+        autoplay: 1, controls: 0, disablekb: 1, fs: 0, rel: 0, iv_load_policy: 3, modestbranding: 1, playsinline: 1,
+        cc_load_policy: this.ccOn ? 1 : 0, cc_lang_pref: "en", start: from > 30 ? Math.floor(from) : 0, origin: location.origin,
+      },
+      events: {
+        onReady: e => { if (!this.el) return; this.ready = true; window.__ytPlayer = e.target; Volume.apply(); e.target.playVideo(); this.banner(); this.enforceCaptions(); },
+        // YouTube loads its captions on its own (it remembers them being on from any earlier video): keep them to your choice
+        onApiChange: () => this.enforceCaptions(),
+        onStateChange: e => this.playerState(e.data),
+        onError: e => this.playerError(e.data),
+      },
+    });
+    this.saveTimer = setInterval(() => this.savePos(), 5000);
+  }
+  unmount() {
+    this.savePos();
+    clearInterval(this.saveTimer); clearInterval(this.ccHold);
+    if (window.__ytPlayer === this.player) window.__ytPlayer = null;
+    try { this.player && this.player.destroy(); } catch {}
+    super.unmount();
+  }
+  leave() { return done(this.el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 250, fill: "forwards" })); }
+  live() {}
+  get pos() { try { return this.ready ? this.player.getCurrentTime() || 0 : 0; } catch { return 0; } }
+  get dur() { try { return (this.ready && this.player.getDuration()) || this.v.runtime || 0; } catch { return this.v.runtime || 0; } }
+  get isPaused() { try { return !this.ready || this.player.getPlayerState() !== 1; } catch { return true; } } // ("paused" is the controls' own pause marker)
+  playerState(s) {
+    if (s === 1) { // playing
+      this.status("");
+      // YouTube switches captions on by itself a few seconds into a video (it remembers them from any
+      // earlier one): hold your choice through the first 20 seconds of play
+      this.enforceCaptions();
+      if (!this.ccHold) {
+        let n = 0;
+        this.ccHold = setInterval(() => { if (!this.el || ++n > 10) return clearInterval(this.ccHold); this.enforceCaptions(); }, 2000);
+      }
+    }
+    else if (s === 3) this.status("buffering…");
+    else if (s === 0) return this.finished();     // ended
+    if (this.mode !== "hidden") this.fill();
+  }
+  playerError(code) {
+    this.blocked = true;
+    this.status(code === 101 || code === 150 ? "this video's owner doesn't allow it to play here — press enter to open it in vacuumtube"
+      : code === 100 ? "this video isn't available any more" : "youtube couldn't play this video — press enter to try vacuumtube");
+  }
+  savePos() {
+    if (!this.ready || this.v.live) return;
+    const t = this.pos, d = this.dur;
+    Tube.setPos(this.v.id, d && t > 30 && t < d - 30 ? t : 0); // near the start or the end: nothing to resume
+  }
+  finished() { this.done = true; Tube.setPos(this.v.id, 0); if (top() === this) back(); }
+  fill() {
+    if (!this.el) return;
+    const v = this.v, pos = this.pos, d = this.dur;
+    this.q(".lv-ch").textContent = v.channel || "youtube";
+    this.q(".lv-title").textContent = v.title;
+    this.q(".lv-sub").textContent = [v.live ? "live" : "", viewCount(v.views), v.when ? ago(v.when) : "", this.isPaused && this.ready ? "paused" : ""].filter(Boolean).join(" · ");
+    this.q(".lv-ov div").textContent = (v.overview || "no description.").slice(0, 600);
+    this.q(".lv-times .a").textContent = fmtT(pos);
+    this.q(".lv-times .b").textContent = d && !v.live ? "-" + fmtT(Math.max(0, d - pos)) : "";
+    qa(this.el, ".lv-bar i").forEach(i => { i.style.width = d && !v.live ? Math.min(100, pos / d * 100) + "%" : "0"; });
+    qa(this.el, ".lv-bar").forEach(b => { b.style.visibility = d && !v.live ? "" : "hidden"; });
+    this.q(".lv-peek-txt").textContent = `${fmtT(pos)} / ${fmtT(d)}`;
+    const play = this.btnEls[YT_PLAY], paused = this.isPaused;
+    play.querySelector(".ring").innerHTML = paused ? ICON.play : ICON.pause;
+    play.querySelector(".lbl").textContent = paused ? "play" : "pause";
+    const cc = this.btnEls.find(b => b.dataset.id === "cc");
+    if (cc) { cc.querySelector(".lbl").textContent = this.ccOn ? "cc on" : "cc off"; cc.classList.toggle("lit", this.ccOn); }
+  }
+  togglePause() {
+    if (!this.ready) return;
+    if (this.isPaused) this.player.playVideo(); else this.player.pauseVideo();
+    setTimeout(() => { this.pauseGlyph(this.isPaused); this.fill(); }, 150);
+  }
+  seek(by) {
+    if (!this.ready || this.v.live) return;
+    this.player.seekTo(clamp(this.pos + by, 0, Math.max(0, this.dur - 1)), true);
+    this.glyph(by < 0 ? `−${-by}` : `+${by}`);
+    this.peek();
+  }
+  seekTo(t) { if (this.ready && !this.v.live) { this.player.seekTo(clamp(t, 0, Math.max(0, this.dur - 1)), true); this.peek(); } }
+  // YouTube's captions have their own on / off, separate from live tv's (settings are remembered)
+  get ccOn() { return !!Prefs.get("ytcc"); }
+  enforceCaptions() {
+    if (!this.ready) return;
+    try {
+      // (YouTube's "current track" report goes stale after captions are switched off, so this goes by
+      // whether its captions module is loaded, which it reports reliably)
+      const loaded = ((this.player.getOptions && this.player.getOptions()) || []).some(m => m === "captions" || m === "cc");
+      if (this.ccOn) {
+        if (!loaded) this.player.loadModule("captions"); // YouTube calls back (onApiChange) once it's in
+        else this.player.setOption("captions", "track", { languageCode: "en" });
+      } else if (loaded) {
+        this.player.unloadModule("captions"); this.player.unloadModule("cc");
+      }
+    } catch { /* captions not loaded yet; YouTube calls back when they are */ }
+  }
+  press(id) {
+    if (id === "play") return this.togglePause();
+    if (id === "rw" || id === "ff") return this.seek(id === "ff" ? 30 : -10);
+    if (id === "start") { if (this.ready) this.player.seekTo(0, true); this.glyph("start"); return; }
+    if (id === "stop") return back();
+    if (id === "cc") {
+      Prefs.set("ytcc", !this.ccOn);
+      // YouTube loads / drops its captions in its own time: apply now, then make sure it took
+      this.enforceCaptions(); [600, 1500, 3000].forEach(t => setTimeout(() => this.el && this.enforceCaptions(), t));
+      toast(this.ccOn ? "captions on" : "captions off");
+    }
+    if (id === "info") {
+      const open = this.q(".lv-osd").classList.toggle("info");
+      if (open) clearTimeout(this.osdTimer); else this.arm("osdHide");
+    }
+    this.fill();
+  }
+  playKey() { this.togglePause(); return true; }
+  skip(dir) { this.seek(dir > 0 ? 30 : -10); }
+  changeChannel() {}
+  mediaKey(k) {
+    if (k === "stop") { back(); return true; }
+    if (k === "next" || k === "prev") { this.seek(k === "next" ? 30 : -10); return true; }
+    return false;
+  }
+  key(k) {
+    if (this.blocked && k === "ok") { Apps.launch(); return true; } // can't play here: VacuumTube instead
+    if (k === "back") {
+      if (this.infoOpen()) { this.q(".lv-osd").classList.remove("info"); this.arm("osdHide"); return true; }
+      if (this.mode === "controls") { this.setMode("hidden"); return true; }
+      return false; // leave: your place is remembered
+    }
+    if (this.mode === "controls") {
+      if (k === "left" || k === "right") this.focusBtn(k === "left" ? -1 : 1);
+      else if (k === "ok") this.press(this.btnEls[this.bi].dataset.id);
+      if (this.mode === "controls" && !this.infoOpen()) this.arm("osdHide");
+      return true;
+    }
+    if (k === "ok") { this.bi = YT_PLAY; this.controls(); return true; }
+    if (k === "left" || k === "right") { this.seek(k === "right" ? 30 : -10); return true; }
+    return true;
+  }
+}
+
 /* ============ sections not built yet ============ */
 class Placeholder extends Page {
   constructor(name, note) { super(); this.name = name; this.heroName = name; this.note = note; }
@@ -2866,6 +3590,8 @@ function sectionPage(id) {
   if (id === "movies") return Emby.connected ? moviesPage() : needEmby(id);
   if (id === "tv shows") return Emby.connected ? tvPage() : needEmby(id);
   if (id === "tv guide") return new GuidePage();
+  if (id === "youtube") return youtubePage();
+  if (id === "recordings") return Emby.connected ? recordingsPage() : needEmby(id);
   if (id === "home videos") return Emby.connected ? homeVideosPage() : needEmby(id);
   if (id === "pictures") return Emby.connected ? picturesPage() : needEmby(id);
   if (id === "radio") return radioPage();
@@ -2904,6 +3630,7 @@ const SETTINGS_TABS = [
     ],
   },
   { name: "radio", build: "radio" },
+  { name: "youtube", build: "youtube" },
   { name: "apps", build: "apps" },
 ];
 
@@ -2944,7 +3671,7 @@ class SettingsPage extends Page {
     this.libsEl = null;
     this.rows = []; this.statusEl = null; this.vaStatusEl = null;
     const t = SETTINGS_TABS[this.tab];
-    const build = { emby: () => this.buildEmby(), menu: () => this.buildMenu(), radio: () => this.buildRadio(), apps: () => this.buildApps() };
+    const build = { emby: () => this.buildEmby(), menu: () => this.buildMenu(), radio: () => this.buildRadio(), youtube: () => this.buildYouTube(), apps: () => this.buildApps() };
     this.items = t.options ? this.buildOptions(t.options) : build[t.build]();
     this.f = clamp(this.f, 0, this.items.length - 1);
     this.paint();
@@ -3046,6 +3773,67 @@ class SettingsPage extends Page {
     form.append(el("div", "set-note t", "one premium listen key works for di.fm, radiotunes, jazzradio, rockradio, classical radio and zenradio. find it on any of those sites under player settings → hardware player."));
     this.setStatus(Radio.key ? "a listen key is saved" : "no listen key yet", Radio.key ? "ok" : "");
     return [...this.rows, ...btns];
+  }
+  buildYouTube() {
+    const form = el("div", "form"); this.body.append(form);
+    if (this.vals.ytKey === undefined) this.vals.ytKey = Prefs.get("ytKey") || "";
+    this.makeField({ id: "ytKey", label: "youtube api key", ph: "your key from google's developer console", secret: true }, form);
+    const opens = Prefs.get("ytOpen") === "vacuumtube" ? "vacuumtube" : "the media center";
+    const btns = this.makeButtons(form, [{ id: "saveYtKey", label: "save" }, { id: "ytSignin", label: "premium sign-in" }, { id: "ytOpen", label: `opens in: ${opens}` }]);
+    this.statusEl = el("div", "status t"); form.append(this.statusEl);
+    form.append(el("div", "set-note t", "with a key, youtube opens right here in the media center, with the same controls as movies. "
+      + "premium sign-in: sign in once on youtube's own page (it opens in this app's browser) so youtube premium applies and videos play without ads. "
+      + "“opens in” switches the menu back to the vacuumtube app, which stays available either way (settings → apps)."));
+    this.setStatus(Tube.key ? `a key is saved · youtube opens in ${opens}` : "no key yet — youtube opens in vacuumtube", Tube.key ? "ok" : "");
+    // your account: the "enter this code" sign-in, for subscriptions, channels, playlists and likes
+    form.classList.add("col1");
+    const aform = el("div", "form col2"); this.body.append(aform);
+    this.vals.ytCid = this.vals.ytCid || ""; this.vals.ytSecret = this.vals.ytSecret || "";
+    const fid = this.makeField({ id: "ytCid", label: "sign-in client id", ph: "…apps.googleusercontent.com" }, aform);
+    const fsec = this.makeField({ id: "ytSecret", label: "client secret", ph: "from the same page", secret: true }, aform);
+    const abtns = this.makeButtons(aform, [{ id: "saveYtClient", label: "save" }, { id: "ytCode", label: "sign in with a code" }, { id: "ytOut", label: "sign out" }]);
+    this.vaStatusEl = el("div", "status t"); aform.append(this.vaStatusEl);
+    aform.append(el("div", "set-note t", "for your subscriptions, channels, playlists and liked videos. in google's console (same project as the key): "
+      + "credentials → create credentials → oauth client id → type “tvs and limited input devices”, then copy its client id and secret here. "
+      + "on the oauth consent screen, set the app to “in production”, or google asks you to sign in again every week."));
+    this.vaStatus("checking…");
+    Tube.account().then(st => {
+      if (!this.el || !this.vaStatusEl || SETTINGS_TABS[this.tab].build !== "youtube") return;
+      if (st.server === false) return this.vaStatus("the helper isn't running — start the app with “Start Media Center”", "err");
+      if (st.client && !fid.input.value) fid.input.placeholder = "saved — type a new one to replace it";
+      if (st.client && !fsec.input.value) fsec.input.placeholder = "saved";
+      this.vaStatus(st.signed_in ? "signed in — your subscriptions are in youtube" : st.client ? "ready — choose “sign in with a code”" : "not set up yet", st.signed_in ? "ok" : "");
+    });
+    return [this.rows[0], ...btns, fid, fsec, ...abtns];
+  }
+  async saveYtClient() {
+    const id = String(this.rows.find(r => r.fd.id === "ytCid").input.value || "").trim();
+    const secret = String(this.rows.find(r => r.fd.id === "ytSecret").input.value || "").trim();
+    if (!id) return this.vaStatus("type the client id first", "err");
+    const r = await Apps.call("/apps/youtube/client", { id, secret });
+    if (r.server === false) return this.vaStatus("the helper isn't running — start the app with “Start Media Center”", "err");
+    if (!r.ok) return this.vaStatus(r.error || "couldn't save that", "err");
+    this.vals.ytCid = ""; this.vals.ytSecret = "";
+    this.vaStatus("saved — now choose “sign in with a code”", "ok");
+  }
+  async ytSignOut() {
+    const r = await Apps.call("/apps/youtube/signout", {});
+    if (r.server === false) return this.vaStatus("the helper isn't running", "err");
+    Tube.signedIn = false; Tube.access = null; Tube.feedCache = null;
+    this.vaStatus("signed out of your youtube account");
+  }
+  saveYtKey() {
+    const key = String(this.rows[0].input.value || "").trim();
+    Prefs.set("ytKey", key);
+    if (!key) return this.setStatus("key removed — youtube opens in vacuumtube");
+    this.setStatus("checking the key…", "busy");
+    Tube.trending().then(l => this.setStatus(`saved — the key works (${l.length} trending videos)`, "ok"), e => this.setStatus("saved, but " + lower(e.message), "err"));
+  }
+  async ytSignin() {
+    const r = await Apps.call("/apps/youtube/signin", {});
+    if (r.server === false) return this.setStatus("the helper isn't running — start the app with “Start Media Center”", "err");
+    if (!r.ok) return this.setStatus(r.error || "couldn't open youtube's sign-in", "err");
+    this.setStatus("youtube's sign-in opened in a new window — sign in there, then close that window (alt+f4)", "ok");
   }
   buildApps() {
     const form = el("div", "form"); this.body.append(form);
@@ -3197,6 +3985,12 @@ class SettingsPage extends Page {
       else if (it.b.id === "signout") this.signOut();
       else if (it.b.id === "saveRadio") this.saveRadio();
       else if (it.b.id === "saveYt") this.saveYouTube();
+      else if (it.b.id === "saveYtKey") this.saveYtKey();
+      else if (it.b.id === "saveYtClient") this.saveYtClient();
+      else if (it.b.id === "ytCode") go(new YtCodePage());
+      else if (it.b.id === "ytOut") this.ytSignOut();
+      else if (it.b.id === "ytSignin") this.ytSignin();
+      else if (it.b.id === "ytOpen") { Prefs.set("ytOpen", Prefs.get("ytOpen") === "vacuumtube" ? "native" : "vacuumtube"); this.refresh("ytOpen"); }
       else if (it.b.id === "testYt") Apps.launch();
       else if (it.b.id === "saveVa") this.saveAssistant();
       else if (it.b.id === "startVa") this.startAssistant();
@@ -3239,6 +4033,7 @@ class SettingsPage extends Page {
     this.msg = { text: "connecting…", kind: "busy" }; this.showStatus();
     try {
       await Emby.connect(this.vals.server, this.vals.user, this.vals.pw);
+      Remote.start(); // take commands from Emby from now on
       this.vals.pw = ""; this.vals.server = Emby.state.server; this.msg = null;
       quick.key = null; quick.rows = null; // quickplay reloads from the server
       this.refresh("signout");
@@ -3250,6 +4045,7 @@ class SettingsPage extends Page {
   async signOut() {
     this.working = true;
     Live.stop();
+    Remote.stop();
     await Emby.signOut();
     quick.key = null; quick.rows = null;
     this.working = false; this.msg = { text: "signed out", kind: "busy" };
@@ -3592,6 +4388,7 @@ const WINDOWS = {
   livetv: "live", live: "live", tvchannels: "live", channels: "live",
   radio: "radio", photos: "pictures", pictures: "pictures", pics: "pictures",
   homevideos: "home videos", homevideo: "home videos", homemovies: "home videos", videos: "home videos",
+  recordings: "recordings", recorded: "recordings", dvr: "recordings", recordedtv: "recordings",
   settings: "settings", setup: "settings", youtube: "youtube",
   nowplaying: "player", fullscreen: "player", player: "player",
 };
@@ -3703,9 +4500,12 @@ async function runAction(action) {
   if (a === "info" || a === "osd") { if (p instanceof LivePage) { p.controls(); p.press("info"); } return true; }
   if (a === "closeinfo") { if (p instanceof LivePage) p.setMode("hidden"); return true; }
   if (a === "contextmenu") return true;
-  if (["showsubtitles", "subtitles", "captions", "closedcaptions", "cc", "togglesubtitles"].includes(a)) { CC.set(!CC.on); toast(CC.on ? "captions on" : "captions off"); return true; }
-  if (["subtitleson", "captionson", "ccon"].includes(a)) { CC.set(true); toast("captions on"); return true; }
-  if (["subtitlesoff", "captionsoff", "ccoff", "hidesubtitles"].includes(a)) { CC.set(false); toast("captions off"); return true; }
+  const ccWant = ["showsubtitles", "subtitles", "captions", "closedcaptions", "cc", "togglesubtitles"].includes(a) ? "toggle"
+    : ["subtitleson", "captionson", "ccon"].includes(a) ? true : ["subtitlesoff", "captionsoff", "ccoff", "hidesubtitles"].includes(a) ? false : null;
+  if (ccWant !== null) { // a youtube video has its own captions setting; everywhere else, live tv's
+    if (p instanceof YtPage) { if (ccWant === "toggle" || ccWant !== p.ccOn) p.press("cc"); return true; }
+    CC.set(ccWant === "toggle" ? !CC.on : ccWant); toast(CC.on ? "captions on" : "captions off"); return true;
+  }
   throw new Error(`unknown action ${action}`);
 }
 
@@ -3716,7 +4516,7 @@ const RPC = {
     const w = WINDOWS[norm(name)];
     if (!w) throw new Error(`unknown window ${name}`);
     if (w === "home") await goHome();
-    else if (w === "youtube") await Apps.launch();
+    else if (w === "youtube") { if (Tube.native) await openSection("youtube"); else await Apps.launch(); }
     else if (w === "player") { if (!(await showPlayer())) throw new Error("nothing is playing"); }
     else if (w === "live") { if (Live.active) await showPlayer(); else await openSection("tv guide"); }
     else await openSection(w);
@@ -3879,6 +4679,116 @@ const GuideFeed = {
   },
 };
 
+/* ============ remote control from Emby ============
+   The app keeps a live connection to Emby and announces itself as a player that takes commands, like
+   Emby's own apps. So the Emby phone app or web page can "play on Media Center", pause, jump, stop,
+   change the volume or show a message — and server plugins can too (ComSkipper jumps over
+   commercials this way, using the Comskip .edl files next to recordings). Reconnects by itself. */
+const Remote = {
+  ws: null, wait: 5000, keep: null, timer: null, live: false,
+  start() {
+    this.stop(true);
+    if (!Emby.connected || location.protocol === "file:") return;
+    let ws;
+    try { ws = Emby.socket(); } catch { return this.later(); }
+    this.ws = ws;
+    ws.onopen = () => { this.live = true; this.wait = 5000; Emby.announce().catch(() => {}); };
+    ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch { return; } this.handle(m); };
+    ws.onclose = () => { this.live = false; clearInterval(this.keep); if (this.ws === ws) this.later(); };
+    ws.onerror = () => {}; // (onclose follows and retries)
+  },
+  later() { // try again, waiting a little longer each time (up to a minute)
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.start(), this.wait);
+    this.wait = Math.min(60000, this.wait * 2);
+  },
+  stop(quiet) {
+    clearTimeout(this.timer); clearInterval(this.keep);
+    const ws = this.ws; this.ws = null; this.live = false;
+    if (ws) try { ws.close(); } catch {}
+  },
+  send(type, data) { try { this.ws && this.ws.readyState === 1 && this.ws.send(JSON.stringify(data === undefined ? { MessageType: type } : { MessageType: type, Data: data })); } catch {} },
+  handle(m) {
+    const d = m.Data || {};
+    if (m.MessageType === "ForceKeepAlive") { // Emby wants a sign of life every so often
+      clearInterval(this.keep);
+      this.keep = setInterval(() => this.send("KeepAlive"), Math.max(5, (+d || 60) * 0.5) * 1000);
+      this.send("KeepAlive");
+    } else if (m.MessageType === "Playstate") this.playstate(d);
+    else if (m.MessageType === "GeneralCommand") this.general(d);
+    else if (m.MessageType === "Play") this.play(d).catch(e => toast("couldn't play that — " + lower(e.message)));
+  },
+  // pause / play / jump / stop / next — for whatever is playing (a movie or recording, youtube, live tv, music)
+  playstate(d) {
+    Saver.poke(); Saver.hide();
+    const p = top(), cmd = d.Command, at = (d.SeekPositionTicks || 0) / 1e7;
+    if (p instanceof VodPage || p instanceof YtPage) {
+      const paused = p instanceof YtPage ? p.isPaused : p.video.paused;
+      if (cmd === "Seek") p.seekTo(at);
+      else if (cmd === "Pause" && !paused || cmd === "Unpause" && paused || cmd === "PlayPause") p.togglePause();
+      else if (cmd === "Stop") back();
+      else if (cmd === "FastForward" || cmd === "NextTrack") p.seek(30);
+      else if (cmd === "Rewind" || cmd === "PreviousTrack") p.seek(-10);
+      return;
+    }
+    if (Live.active) {
+      const paused = Live.video.paused;
+      if (cmd === "Pause" && !paused || cmd === "Unpause" && paused || cmd === "PlayPause") handle("play");
+      else if (cmd === "Stop") Live.stop();
+      else if ((cmd === "NextTrack" || cmd === "PreviousTrack") && p instanceof LivePage) p.changeChannel(cmd === "NextTrack" ? 1 : -1);
+      return;
+    }
+    if (Player.track) {
+      if (cmd === "Seek" && Player.track.stream && !Player.track.live) { audio.currentTime = at; Player.pos = at; emit("tick"); }
+      else if (cmd === "Pause" && Player.playing || cmd === "Unpause" && !Player.playing || cmd === "PlayPause") Player.toggle();
+      else if (cmd === "Stop") Player.stop();
+      else if (cmd === "NextTrack") Player.next();
+      else if (cmd === "PreviousTrack") Player.prev();
+    }
+  },
+  general(d) {
+    const a = d.Arguments || {}, n = d.Name;
+    if (n !== "DisplayMessage") { Saver.poke(); Saver.hide(); }
+    if (n === "DisplayMessage") toast(lower(a.Text || a.Header || ""));
+    else if (n === "SetVolume") Volume.set(+a.Volume);
+    else if (n === "VolumeUp" || n === "VolumeDown") Volume.set(Volume.level + (n === "VolumeUp" ? 5 : -5));
+    else if (n === "ToggleMute" || n === "Mute" || n === "Unmute") { Volume.muted = n === "Mute" ? true : n === "Unmute" ? false : !Volume.muted; Volume.apply(); }
+    else if (n === "GoHome") goHome();
+    else if (n === "GoToSettings") openSection("settings");
+    else if (n === "Back") handle("back");
+    else if (n === "Select") handle("ok");
+    else if (["MoveUp", "MoveDown", "MoveLeft", "MoveRight"].includes(n)) handle(n.slice(4).toLowerCase());
+    else if (n === "DisplayContent" && a.ItemId) this.play({ ItemIds: [a.ItemId], PlayCommand: "Show" }).catch(() => {});
+  },
+  // "play on Media Center": music, a movie / episode / recording, a channel, photos, or a show's page
+  async play(d) {
+    const ids = d.ItemIds || []; if (!ids.length) return;
+    const r = await Emby.resolvePlay(ids), from = (d.StartPositionTicks || 0) / 1e7, how = d.PlayCommand || "PlayNow";
+    Saver.poke(); Saver.hide();
+    await settled();
+    if (r.kind === "music") {
+      let list = r.list; if (!list.length) return;
+      if (how === "PlayShuffle") list = shuffled(list);
+      if ((how === "PlayNext" || how === "PlayLast") && Player.track) {
+        if (how === "PlayNext") Player.queue.splice(Player.i + 1, 0, ...list); else Player.queue.push(...list);
+        return toast(`added ${list.length} song${list.length === 1 ? "" : "s"} to what's playing`);
+      }
+      Player.play(list, 0);
+      if (!(top() instanceof NowPlaying)) go(new NowPlaying());
+    } else if (r.kind === "video") {
+      const v = r.list[0];
+      if (how === "Show") return go(new VideoPage(v));
+      go(new VodPage(v, from || 0));
+    } else if (r.kind === "channel") {
+      const chans = await channelList(), ch = chans.find(c => c.id === r.list[0].id);
+      if (!ch) return toast("that channel isn't in the guide");
+      const g = new GuidePage(); g.channels = chans;
+      go(new LivePage(g, chans.indexOf(ch)), { replace: top() instanceof LivePage });
+    } else if (r.kind === "photo") go(new PhotoPage(r.list, 0, "pictures"));
+    else if (r.kind === "show") openShow(r.list[0]);
+  },
+};
+
 /* ============ music screensaver (Zune "now playing" style) ============
    While music or radio plays and nothing has been pressed for a while (settings → playback →
    music screensaver), the screen fills with the artist's photos, slowly drifting and changing, with
@@ -3985,7 +4895,7 @@ const Saver = {
 };
 
 // for testing
-window.__app = { Player, stack, go, back, quick, RPC, Volume, Live, Dual, Lyrics, VideoPage, Radio, Saver, artistPage };
+window.__app = { Player, stack, go, back, quick, RPC, Volume, Live, Dual, Lyrics, VideoPage, Radio, Saver, artistPage, Tube, YtCodePage, Remote };
 
 // hide the mouse pointer after 3 seconds without movement; moving the mouse brings it back
 let pointerTimer = null;
@@ -4005,4 +4915,6 @@ loadQuickplay();
 go(new Home());
 VoiceLink.start(); // voice commands from the assistant
 GuideFeed.start(); // guide copy for "what's on" questions
+if (location.protocol !== "file:") Tube.account().catch(() => {}); // signed in to a youtube account? (adds subscriptions etc.)
+Remote.start(); // remote control from Emby (phone app, web page, ComSkipper)
 })();

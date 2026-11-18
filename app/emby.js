@@ -430,9 +430,73 @@ window.Emby = (() => {
       img: img(i.Id, i.ImageTags && i.ImageTags.Primary, "Primary", 720),
       aspect: i.PrimaryImageAspectRatio || 0, // guide pictures are usually portrait posters (about 0.67)
       isNew: !!(i.IsNew || i.IsPremiere), isLive: !!i.IsLive, isMovie: !!i.IsMovie,
+      isSeries: !!i.IsSeries, timerId: i.TimerId || null, seriesTimerId: i.SeriesTimerId || null, // set to record?
     })),
     liveStream, stopStream,
     videoStream, report, artistInfo,
+    // ----- being a remote-controllable player (Emby's phone app, the web page, plugins like ComSkipper) -----
+    // the live connection Emby sends commands through (same device id as everything else the app sends)
+    socket: () => new WebSocket(s.server.replace(/^http/i, "ws") + "/embywebsocket?" + Q({ api_key: s.token, deviceId })),
+    // tell Emby this player takes commands, and which
+    announce: () => req("/Sessions/Capabilities/Full", { method: "POST", body: {
+      PlayableMediaTypes: ["Audio", "Video", "Photo"], SupportsMediaControl: true, SupportsPersistentIdentifier: true, SupportsSync: false,
+      SupportedCommands: ["DisplayMessage", "SetVolume", "VolumeUp", "VolumeDown", "ToggleMute", "Mute", "Unmute", "GoHome", "GoToSettings",
+        "Back", "MoveUp", "MoveDown", "MoveLeft", "MoveRight", "Select", "DisplayContent"],
+    } }),
+    // "play these" from another device → something the app can play: music, a video, a channel, photos or a show
+    async resolvePlay(ids) {
+      const raw = list(await req(`/Users/${s.userId}/Items?` + Q({ Ids: ids.join(","), Fields: FIELDS + ",PremiereDate,Path", EnableUserData: true })));
+      const by = new Map(raw.map(i => [i.Id, i]));
+      const items = ids.map(id => by.get(id)).filter(Boolean);
+      const first = items[0];
+      if (!first) return { kind: "none", list: [] };
+      const t = first.Type;
+      if (t === "Audio") return { kind: "music", list: items.filter(i => i.Type === "Audio").map(i => mapTrack(i)) };
+      if (t === "MusicAlbum") return { kind: "music", list: await api.albumTracks(mapAlbum(first)) };
+      if (t === "MusicArtist") return { kind: "music", list: await api.artistSongs(first.Id) };
+      if (t === "Playlist") return { kind: "music", list: await api.playlistTracks(first.Id) };
+      if (t === "TvChannel") return { kind: "channel", list: [{ id: first.Id, name: first.Name || "" }] };
+      if (t === "Photo") return { kind: "photo", list: items.filter(i => i.Type === "Photo").map(mapMedia) };
+      if (t === "Series") return { kind: "show", list: [mapVideo(first)] };
+      return { kind: "video", list: items.map(i => ({ ...mapVideo(i), rec: !!(i.IsRecording || i.TimerId || i.Type === "Recording") })) };
+    },
+    // ----- recording (Emby's DVR) -----
+    // one airing, or a whole series, starting from a guide show (Emby fills in its defaults first)
+    async record(programId) {
+      const d = await req(`/LiveTv/Timers/Defaults?` + Q({ ProgramId: programId }));
+      await req("/LiveTv/Timers", { method: "POST", body: d });
+    },
+    async recordSeries(programId, opts = {}) {
+      const d = await req(`/LiveTv/Timers/Defaults?` + Q({ ProgramId: programId }));
+      await req("/LiveTv/SeriesTimers", { method: "POST", body: { ...d, ...opts } });
+    },
+    cancelTimer: id => req(`/LiveTv/Timers/${id}`, { method: "DELETE" }),
+    cancelSeries: id => req(`/LiveTv/SeriesTimers/${id}`, { method: "DELETE" }),
+    updateSeries: st => req(`/LiveTv/SeriesTimers/${st.Id}`, { method: "POST", body: st }),
+    // what's set to record: one-time recordings (soonest first) and series rules
+    timers: async () => list(await req("/LiveTv/Timers?" + Q({ IsActive: false })))
+      .map(t => ({ id: t.Id, programId: t.ProgramId, seriesTimerId: t.SeriesTimerId, title: t.Name || "", ep: (t.ProgramInfo && t.ProgramInfo.EpisodeTitle) || "",
+        channel: t.ChannelName || "", start: date(t.StartDate), end: date(t.EndDate), status: t.Status || "", img: t.ProgramInfo ? img(t.ProgramInfo.Id, t.ProgramInfo.ImageTags && t.ProgramInfo.ImageTags.Primary, "Primary", 480) : null }))
+      .sort((a, b) => a.start - b.start),
+    seriesTimers: async () => list(await req("/LiveTv/SeriesTimers?" + Q({ SortBy: "SortName" })))
+      .map(s => ({ id: s.Id, raw: s, title: s.Name || "", channel: s.ChannelName || "", anyChannel: !!s.RecordAnyChannel, newOnly: !!s.RecordNewOnly, keep: s.KeepUpTo || 0,
+        img: s.ImageTags && s.ImageTags.Primary ? img(s.Id, s.ImageTags.Primary, "Primary", 480) : null })),
+    // the recordings themselves (finished ones and any recording right now), newest first
+    recordings: async () => list(await req("/LiveTv/Recordings?" + Q({ UserId: s.userId, Fields: FIELDS + ",PremiereDate,ChannelInfo", EnableUserData: true, EnableImages: true, Limit: 600 })))
+      .map(i => {
+        const series = i.SeriesName || (i.IsSeries ? i.Name : "");
+        return {
+          id: i.Id, type: i.Type, rec: true, title: series || i.Name || "", ep: i.EpisodeTitle || (series && i.Name !== series ? i.Name : ""),
+          seriesName: series, isMovie: !!(i.IsMovie || i.Type === "Movie"), channel: i.ChannelName || "",
+          img: img(i.Id, i.ImageTags && i.ImageTags.Primary, "Primary", 480),
+          thumb: img(i.Id, i.ImageTags && (i.ImageTags.Thumb || i.ImageTags.Primary), i.ImageTags && i.ImageTags.Thumb ? "Thumb" : "Primary", 360),
+          when: date(i.StartDate) || date(i.DateCreated) || 0, added: i.DateCreated || "", runtime: secs(i.RunTimeTicks), overview: i.Overview || "",
+          recording: i.Status === "InProgress" || !!i.IsRecording, season: i.ParentIndexNumber, episode: i.IndexNumber,
+          resume: secs(i.UserData && i.UserData.PlaybackPositionTicks), played: !!(i.UserData && i.UserData.Played), hue: hashHue(i.Name || i.Id), emby: true,
+        };
+      })
+      .sort((a, b) => b.when - a.when),
+    deleteItem: id => req(`/Items/${id}`, { method: "DELETE" }),
     mediaLibs, folder, everything,
     lyrics,
     // either

@@ -667,6 +667,29 @@ html, body {
 }
 .sv-bio.in { opacity: 1; transform: none; }
 
+/* ---------- youtube (app.js: Tube, YtPage) ---------- */
+.yt-host { position: absolute; inset: 0; background: #000; pointer-events: none; }
+.yt-host iframe, .yt-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.tile.media .len.live { background: #c8102e; text-transform: uppercase; letter-spacing: .04em; }
+.tile.media .seen { position: absolute; left: 0; right: 0; bottom: 0; height: 5px; background: rgba(255,255,255,.25); }
+.tile.media .seen i { display: block; height: 100%; background: var(--fg); }
+.r-search, .r-recent { display: flex; align-items: center; gap: 26px; }
+.r-search .ic, .r-recent .ic { width: 56px; flex: none; text-align: center; font-size: 40px; color: var(--sub); }
+.r-recent .t1 { font-size: 40px; }
+.yt-q {
+  flex: 1; max-width: 1100px; font: inherit; font-size: 52px; color: var(--fg); background: transparent; border: 0;
+  border-bottom: 3px solid currentColor; outline: none; padding: 4px 0; caret-color: var(--fg);
+}
+.yt-q::placeholder { color: var(--sub); }
+
+/* "enter this code" sign-in screen */
+.yt-code .ytc-step { position: absolute; left: 100px; top: 230px; }
+.yt-code .ytc-how { position: relative; margin-left: 100px; font-size: 36px; color: var(--dim); }
+.yt-code .ytc-how.first { margin-top: 330px; }
+.yt-code .ytc-url { margin: 6px 0 40px 100px; font-size: 76px; font-weight: 600; }
+.yt-code .ytc-code { margin: 10px 0 40px 100px; font-size: 150px; line-height: 1; font-weight: 700; letter-spacing: .08em; }
+.yt-code .ytc-state { margin-left: 100px; }
+
 /* ---------- movies & episodes (app.js: VodPage) ---------- */
 .vod-page { background: #000; }
 .vod-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
@@ -708,3 +731,58 @@ html, body {
 
 /* mouse pointer hidden after 3 seconds without movement (app.js: pointerIdle) */
 html.nopointer, html.nopointer * { cursor: none !important; }
+
+/* ---------- what's picked: a solid border with a soft glow, in the theme colour ----------
+   Covers, posters, thumbnails and the quickplay shelf get a border just outside the picture;
+   round pictures (artists, youtube channels) a matching ring. It slides in as the item grows.
+   Text lists stay Zune-style (no boxes): the picked line is bright, the rest a little dimmer. */
+:root {
+  --ring: 4px; --ring-gap: 5px;
+  --glow: 0 0 34px 8px color-mix(in srgb, var(--fg) 60%, transparent);
+  --idle: color-mix(in srgb, var(--fg) 38%, transparent);
+}
+.tile, .qp-tile, .tile.media .pic, .tile.artist .circ {
+  outline: var(--ring) solid transparent; outline-offset: 14px;
+  transition: scale 280ms var(--ease), outline-color 180ms ease, outline-offset 300ms var(--ease), box-shadow 300ms var(--ease);
+}
+.tile.media, .tile.artist, .tile.letter { outline: none; }      /* (their picture carries the border instead) */
+.tile.focus:not(.media):not(.artist):not(.letter), .qp-tile.focus, .tile.media.focus .pic, .tile.artist.focus .circ {
+  outline-color: var(--fg); outline-offset: var(--ring-gap);
+  box-shadow: var(--glow), 0 18px 44px rgba(0,0,0,.65);
+}
+/* focus is up on the section labels: the covers' picked item rests without its border */
+.dimfocus .tile.focus, .dimfocus .tile.focus .pic, .dimfocus .tile.focus .circ { outline-color: transparent !important; box-shadow: none !important; }
+/* room around a grid so the border and glow of an edge cover aren't cut off (the covers stay aligned) */
+.list.grid { left: -26px; right: -26px; top: -26px; padding: 26px 26px 0; box-sizing: content-box; }
+/* picture in picture: same border weight, same glow */
+.mv-frame { border-width: var(--ring); box-shadow: var(--glow); }
+/* text lists: unpicked lines a step dimmer so the bright one stands out */
+.row, .r-dual, .vd-opt { color: var(--idle); }
+.row.focus, .r-dual.focus { color: var(--fg); }
+.dimfocus .row.focus { color: var(--dim); }
+
+/* ---------- recording (app.js: DVR) ---------- */
+/* guide: a red dot on shows set to record (two for a series), a red REC on one recording right now */
+.gd-cell .recmark {
+  position: absolute; right: 10px; top: 10px; width: 12px; height: 12px; border-radius: 50%; background: #e0303a;
+  box-shadow: 0 0 6px rgba(224,48,58,.7);
+}
+.gd-cell .recmark.series { box-shadow: -16px 0 0 #e0303a, 0 0 6px rgba(224,48,58,.7); }
+.gd-cell .recmark.now {
+  width: auto; height: auto; border-radius: 3px; padding: 1px 7px; font-size: 15px; font-weight: 700; line-height: 20px;
+  letter-spacing: .06em; text-transform: uppercase; color: #fff;
+}
+.gd-cell.rec { padding-right: 34px; }
+/* live tv: the record button and the banner */
+.lv-ctl .rb[data-id="rec"] svg { fill: #e0303a; }
+.lv-ctl .rb.recording .ring { border-color: #e0303a; box-shadow: 0 0 14px rgba(224,48,58,.6); }
+.lv-sub .recdot { color: #ff4a55; font-weight: 700; }
+/* buttons: recording set / delete confirmation */
+.btn.rec-on { border-color: #e0303a; }
+.btn.danger, .btn.danger.focus { background: #c8102e; border-color: #c8102e; color: #fff; }
+/* recording tiles reuse the thumbnail look; a red REC while still recording */
+.tile.media .len.live { background: #c8102e; }
+/* the small pages: one scheduled recording, a series' options */
+.action-page .act-btns { position: absolute; left: 100px; top: 360px; }
+.action-page .act-body { position: absolute; left: 0; right: 0; top: 340px; }
+.action-page .act-body .act-btns { position: static; margin: 40px 0 0 100px; }

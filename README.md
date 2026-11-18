@@ -44,7 +44,7 @@ Open the app with the bat file. Opening `index.html` by itself skips the helper,
 
 ## First time you open it
 
-The home screen is a list: Music, Movies, TV Shows, Home Videos, TV Guide, Radio, YouTube, Pictures, and Settings.
+The home screen is a list: Music, Movies, TV Shows, Home Videos, TV Guide, Recordings, Radio, YouTube, Pictures, and Settings.
 
 - **Arrow keys** move
 - **Enter** selects
@@ -61,21 +61,23 @@ To use your own library:
 
 Your password is typed in only to sign in. The app does not save the password. It remembers the sign-in on this PC, in a `browser-data` folder that it creates next to the bat file. That folder stays on your computer. It is not part of this download.
 
-Until you sign in, **Music** shows a made-up sample library so you can click around, and **TV Guide** shows sample channels. **Movies**, **TV Shows**, **Home Videos**, and **Pictures** wait until Emby is connected.
+Until you sign in, **Music** shows a made-up sample library so you can click around, and **TV Guide** shows sample channels. **Movies**, **TV Shows**, **Home Videos**, **Recordings**, and **Pictures** wait until Emby is connected.
 
 Other setup, all under **Settings**, and all saved on this PC:
 
 - **Radio** — paste your premium listen key, then choose **Save**
-- **Apps** — paste the path to `VacuumTube.exe` if you want YouTube
+- **YouTube** — a YouTube key, if you want videos to play inside this app
+- **Apps** — the path to `VacuumTube.exe`, if you still want YouTube to open in that separate app
 - **Hub menu**, **Appearance**, and **Playback** — menu order, colors, and how long the on-screen info stays up
 
 ## What each menu item does
 
 - **Music, Movies, TV Shows** — your Emby library. Movies and episodes can resume where you stopped.
 - **Home Videos** — home movies and other videos you keep in an Emby “home videos” library. You can browse by folder, see everything, or see the newest ones. A video you already started can resume.
-- **TV Guide** — the channel grid from Emby. Before you sign in, it shows sample channels so you can try the screen. Live TV can keep playing behind the menus. On the player, the **pip** button adds more channels: one big picture and up to three small ones, or two side by side. Pick which look under **Settings**, then **Playback**. The **captions** button turns closed captions on or off for live TV, and that choice is remembered. Arrows move between the pictures (you hear the one with the frame). Enter swaps a small picture into the big spot, or returns to one full-screen channel. Back closes the framed picture.
+- **TV Guide** — the channel grid from Emby. Before you sign in, it shows sample channels so you can try the screen. Open a show and you can watch it, record that airing, or record the series. Live TV can keep playing behind the menus. On the player, the **pip** button adds more channels: one big picture and up to three small ones, or two side by side. Pick which look under **Settings**, then **Playback**. The **captions** button turns closed captions on or off for live TV, and that choice is remembered. Arrows move between the pictures (you hear the one with the frame). Enter swaps a small picture into the big spot, or returns to one full-screen channel. Back closes the framed picture.
+- **Recordings** — what Emby’s DVR has recorded, plus what is set to record. Sections are **Recent**, **Shows**, **Movies**, **Scheduled**, and **Series**. Your Emby user needs permission to manage live TV recordings. If a button says it is not allowed, that permission is under Emby’s dashboard, then Users, then your account.
 - **Radio** — DI.FM, RadioTunes, JazzRadio, RockRadio, Classical Radio, and ZenRadio. These need a premium listen key from those sites (player settings, then hardware player). One key covers all six.
-- **YouTube** — opens the VacuumTube app full screen. Install VacuumTube first, then set its path under **Settings**, then **Apps**.
+- **YouTube** — with no extra setup, this still opens the VacuumTube app. Add a YouTube key under **Settings**, then **YouTube**, and videos play inside the media center with the same controls as movies. **Premium sign-in** opens YouTube’s own page once, so a Premium account plays without ads. **Sign in with a code** (that page explains the Google client id) adds your subscriptions, playlists, and liked videos. The key and the sign-in stay on this PC. They are not part of the download.
 - **Pictures** — photos from an Emby library named Photos or Pictures, or from a combined home-videos-and-photos library. **Folders** follows your folders. **All** shows every photo. **Recent** shows the newest ones. Enter on a photo fills the screen. Left and right move between photos. Enter starts a slideshow, about 7 seconds each. Up shows the name and date.
 - **Settings** — everything in the list above.
 
@@ -83,6 +85,9 @@ On **Settings**, then **Hub menu**, the instructions sit to the right of the lis
 
 ## What's new
 
+- **Recordings** is on the home menu. From a show in the TV guide you can record that airing or the series.
+- **YouTube** can play inside the media center after you add a key under **Settings**, then **YouTube**. VacuumTube is still there if you prefer it.
+- The Emby app on a phone can control this screen: play, pause, and move around, the same as the remote.
 - Live TV can show up to four channels at once: one big picture and three small ones. **Settings**, then **Playback**, can switch that to two channels side by side.
 - Live TV has a **captions** button. On or off is remembered.
 - If a movie or episode will not play as it is, the app asks Emby to convert it and continues from the same spot.
