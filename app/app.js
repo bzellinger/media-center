@@ -2857,6 +2857,11 @@ const CC = {
     const p = top(), box = p instanceof LivePage && !(p instanceof VodPage) && !(p instanceof YtPage) && p.el ? p.q(".lv-cc") : null;
     if (!box) return;
     const cues = this.on && this.track && this.track.activeCues ? [...this.track.activeCues] : [];
+    // each caption line arrives as its own piece with its screen row, not always in reading order:
+    // put them top to bottom (then by when they appeared), so "hello / neighbor" doesn't come out upside down
+    const row = c => typeof c.line === "number" ? c.line : 1e6;
+    cues.forEach((c, i) => { c._order = i; });
+    cues.sort((a, b) => row(a) - row(b) || a.startTime - b.startTime || a._order - b._order);
     const text = cues.map(c => String(c.text || "").replace(/<[^>]+>/g, "")).join("\n").trim();
     if (box.dataset.text !== text) {
       box.dataset.text = text;
@@ -3774,37 +3779,45 @@ class SettingsPage extends Page {
     this.setStatus(Radio.key ? "a listen key is saved" : "no listen key yet", Radio.key ? "ok" : "");
     return [...this.rows, ...btns];
   }
+  // one column, read top to bottom: your key (+ premium sign-in), where youtube opens, your account
   buildYouTube() {
-    const form = el("div", "form"); this.body.append(form);
+    const form = el("div", "form stack"); this.body.append(form);
+    const sec = t => form.append(el("div", "set-sec t", esc(t)));
+    sec("youtube key");
     if (this.vals.ytKey === undefined) this.vals.ytKey = Prefs.get("ytKey") || "";
-    this.makeField({ id: "ytKey", label: "youtube api key", ph: "your key from google's developer console", secret: true }, form);
-    const opens = Prefs.get("ytOpen") === "vacuumtube" ? "vacuumtube" : "the media center";
-    const btns = this.makeButtons(form, [{ id: "saveYtKey", label: "save" }, { id: "ytSignin", label: "premium sign-in" }, { id: "ytOpen", label: `opens in: ${opens}` }]);
+    const kfield = this.makeField({ id: "ytKey", label: "api key", ph: "your key from google's developer console", secret: true }, form);
+    const kbtns = this.makeButtons(form, [{ id: "saveYtKey", label: "save" }, { id: "ytSignin", label: "premium" }]);
     this.statusEl = el("div", "status t"); form.append(this.statusEl);
-    form.append(el("div", "set-note t", "with a key, youtube opens right here in the media center, with the same controls as movies. "
-      + "premium sign-in: sign in once on youtube's own page (it opens in this app's browser) so youtube premium applies and videos play without ads. "
-      + "“opens in” switches the menu back to the vacuumtube app, which stays available either way (settings → apps)."));
-    this.setStatus(Tube.key ? `a key is saved · youtube opens in ${opens}` : "no key yet — youtube opens in vacuumtube", Tube.key ? "ok" : "");
-    // your account: the "enter this code" sign-in, for subscriptions, channels, playlists and likes
-    form.classList.add("col1");
-    const aform = el("div", "form col2"); this.body.append(aform);
+    form.append(el("div", "set-note t", "premium: sign in once on youtube's own page so videos play without ads."));
+    this.setStatus(Tube.key ? "a key is saved" : "no key yet — youtube opens in vacuumtube", Tube.key ? "ok" : "");
+
+    sec("menu");
+    const orow = el("div", "opt-row t", `<div class="lab">youtube opens in</div><div class="btn"></div>`);
+    orow.opt = {
+      label: "youtube opens in", values: () => [["native", "the media center"], ["vacuumtube", "vacuumtube"]],
+      get: () => Prefs.get("ytOpen") === "vacuumtube" ? "vacuumtube" : "native", set: v => Prefs.set("ytOpen", v),
+    };
+    form.append(orow); this.showValue(orow);
+
+    sec("your account");
     this.vals.ytCid = this.vals.ytCid || ""; this.vals.ytSecret = this.vals.ytSecret || "";
-    const fid = this.makeField({ id: "ytCid", label: "sign-in client id", ph: "…apps.googleusercontent.com" }, aform);
-    const fsec = this.makeField({ id: "ytSecret", label: "client secret", ph: "from the same page", secret: true }, aform);
-    const abtns = this.makeButtons(aform, [{ id: "saveYtClient", label: "save" }, { id: "ytCode", label: "sign in with a code" }, { id: "ytOut", label: "sign out" }]);
-    this.vaStatusEl = el("div", "status t"); aform.append(this.vaStatusEl);
-    aform.append(el("div", "set-note t", "for your subscriptions, channels, playlists and liked videos. in google's console (same project as the key): "
-      + "credentials → create credentials → oauth client id → type “tvs and limited input devices”, then copy its client id and secret here. "
-      + "on the oauth consent screen, set the app to “in production”, or google asks you to sign in again every week."));
+    const fid = this.makeField({ id: "ytCid", label: "sign-in client id", ph: "…apps.googleusercontent.com" }, form);
+    const fsec = this.makeField({ id: "ytSecret", label: "client secret", ph: "from the same page in google's console", secret: true }, form);
+    // one button for signing in or out, whichever applies
+    const acct = signed => signed ? { id: "ytOut", label: "sign out" } : { id: "ytCode", label: "sign in" };
+    const abtns = this.makeButtons(form, [{ id: "saveYtClient", label: "save" }, acct(Tube.signedIn)]);
+    this.vaStatusEl = el("div", "status t"); form.append(this.vaStatusEl);
+    form.append(el("div", "set-note t", "for your subscriptions, channels, playlists and liked videos. the readme says where to get the client id and secret."));
     this.vaStatus("checking…");
     Tube.account().then(st => {
       if (!this.el || !this.vaStatusEl || SETTINGS_TABS[this.tab].build !== "youtube") return;
       if (st.server === false) return this.vaStatus("the helper isn't running — start the app with “Start Media Center”", "err");
       if (st.client && !fid.input.value) fid.input.placeholder = "saved — type a new one to replace it";
       if (st.client && !fsec.input.value) fsec.input.placeholder = "saved";
-      this.vaStatus(st.signed_in ? "signed in — your subscriptions are in youtube" : st.client ? "ready — choose “sign in with a code”" : "not set up yet", st.signed_in ? "ok" : "");
+      const b = abtns[1]; b.b = acct(!!st.signed_in); b.textContent = b.b.label;
+      this.vaStatus(st.signed_in ? "signed in — your subscriptions are in youtube" : st.client ? "ready — choose “sign in”" : "not set up yet", st.signed_in ? "ok" : "");
     });
-    return [this.rows[0], ...btns, fid, fsec, ...abtns];
+    return [kfield, ...kbtns, orow, fid, fsec, ...abtns];
   }
   async saveYtClient() {
     const id = String(this.rows.find(r => r.fd.id === "ytCid").input.value || "").trim();
@@ -3814,13 +3827,14 @@ class SettingsPage extends Page {
     if (r.server === false) return this.vaStatus("the helper isn't running — start the app with “Start Media Center”", "err");
     if (!r.ok) return this.vaStatus(r.error || "couldn't save that", "err");
     this.vals.ytCid = ""; this.vals.ytSecret = "";
-    this.vaStatus("saved — now choose “sign in with a code”", "ok");
+    this.vaStatus("saved — now choose “sign in”", "ok");
   }
   async ytSignOut() {
     const r = await Apps.call("/apps/youtube/signout", {});
     if (r.server === false) return this.vaStatus("the helper isn't running", "err");
     Tube.signedIn = false; Tube.access = null; Tube.feedCache = null;
-    this.vaStatus("signed out of your youtube account");
+    this.refresh("ytCode"); // the button becomes "sign in"
+    toast("signed out of your youtube account");
   }
   saveYtKey() {
     const key = String(this.rows[0].input.value || "").trim();
@@ -3835,13 +3849,16 @@ class SettingsPage extends Page {
     if (!r.ok) return this.setStatus(r.error || "couldn't open youtube's sign-in", "err");
     this.setStatus("youtube's sign-in opened in a new window — sign in there, then close that window (alt+f4)", "ok");
   }
+  // one column: vacuumtube (youtube's fallback), then the voice assistant
   buildApps() {
-    const form = el("div", "form"); this.body.append(form);
+    const form = el("div", "form stack"); this.body.append(form);
+    const sec = t => form.append(el("div", "set-sec t", esc(t)));
+    sec("vacuumtube (youtube fallback)");
     this.vals.ytPath = this.vals.ytPath || "";
-    const field = this.makeField({ id: "ytPath", label: "vacuumtube.exe location (for youtube)", ph: "e.g. C:\\Users\\you\\AppData\\Local\\Programs\\VacuumTube\\VacuumTube.exe" }, form);
-    const btns = this.makeButtons(form, [{ id: "saveYt", label: "save" }, { id: "testYt", label: "open youtube" }]);
+    const field = this.makeField({ id: "ytPath", label: "vacuumtube.exe location", ph: "e.g. C:\\Users\\you\\AppData\\Local\\Programs\\VacuumTube\\VacuumTube.exe" }, form);
+    const btns = this.makeButtons(form, [{ id: "saveYt", label: "save" }, { id: "testYt", label: "open it" }]);
     this.statusEl = el("div", "status t"); form.append(this.statusEl);
-    form.append(el("div", "set-note t", "youtube opens in the separate vacuumtube app, full screen. this needs the app started with “Start Media Center”, which runs a small helper on this pc."));
+    form.append(el("div", "set-note t", "the separate youtube app, full screen. used when settings → youtube says so, or a video can't play here."));
     this.setStatus("checking…");
     Apps.status().then(st => {
       if (!this.el || !this.statusEl || SETTINGS_TABS[this.tab].build !== "apps") return;
@@ -3849,14 +3866,13 @@ class SettingsPage extends Page {
       if (st.path && !this.vals.ytPath) { this.vals.ytPath = st.path; field.input.value = st.path; }
       this.setStatus(st.ready ? "ready" : "not set up yet", st.ready ? "ok" : "");
     });
-    // voice assistant: the helper starts it (and its mic listener) along with the media center
-    form.classList.add("col1");
-    const vform = el("div", "form col2"); this.body.append(vform);
+
+    sec("voice assistant");
     this.vals.vaPath = this.vals.vaPath || "";
-    const vfield = this.makeField({ id: "vaPath", label: "voice assistant folder", ph: "the folder with app.py, e.g. C:\\assistant" }, vform);
-    const vbtns = this.makeButtons(vform, [{ id: "saveVa", label: "save" }, { id: "startVa", label: "start it now" }]);
-    this.vaStatusEl = el("div", "status t"); vform.append(this.vaStatusEl);
-    vform.append(el("div", "set-note t", "once this is set, “Start Media Center” also starts your voice assistant and its mic listener, in minimized windows. if they're already running, it leaves them alone."));
+    const vfield = this.makeField({ id: "vaPath", label: "assistant folder", ph: "the folder with app.py, e.g. C:\\assistant" }, form);
+    const vbtns = this.makeButtons(form, [{ id: "saveVa", label: "save" }, { id: "startVa", label: "start it now" }]);
+    this.vaStatusEl = el("div", "status t"); form.append(this.vaStatusEl);
+    form.append(el("div", "set-note t", "“Start Media Center” starts it and its mic listener too, in minimized windows."));
     this.vaStatus("checking…");
     Apps.call("/apps/assistant").then(st => {
       if (!this.el || !this.vaStatusEl || SETTINGS_TABS[this.tab].build !== "apps") return;
@@ -3864,7 +3880,7 @@ class SettingsPage extends Page {
       if (st.path && !this.vals.vaPath) { this.vals.vaPath = st.path; vfield.input.value = st.path; }
       this.vaStatus(st.running ? "running" : st.ready ? "set up — not running right now" : "not set up yet", st.running ? "ok" : "");
     });
-    return [...this.rows.slice(0, 1), ...btns, vfield, ...vbtns];
+    return [field, ...btns, vfield, ...vbtns];
   }
   vaStatus(text, kind = "") {
     const e = this.vaStatusEl;

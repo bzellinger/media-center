@@ -786,3 +786,17 @@ html.nopointer, html.nopointer * { cursor: none !important; }
 .action-page .act-btns { position: absolute; left: 100px; top: 360px; }
 .action-page .act-body { position: absolute; left: 0; right: 0; top: 340px; }
 .action-page .act-body .act-btns { position: static; margin: 40px 0 0 100px; }
+
+/* ---------- buttons: always one line (a row of them wraps instead) ---------- */
+.btn { white-space: nowrap; }
+.btn-row { flex-wrap: wrap; row-gap: 20px; }
+
+/* ---------- settings tabs laid out as one column, with section headings (youtube, apps) ---------- */
+.set-body > .form.stack { position: static; margin-left: 100px; width: 1500px; }
+.form.stack .set-sec {
+  margin: 64px 0 10px; font-size: 30px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--fg);
+}
+.form.stack .set-sec:first-child { margin-top: 0; }
+.form.stack .opt-row { margin-left: 0; }
+.form.stack .status { margin-top: 24px; min-height: 0; }
+.form.stack .set-note { margin-top: 10px; max-width: 1300px; }
