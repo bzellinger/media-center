@@ -1,4 +1,12 @@
 /* Everything is laid out on a fixed 1920x1080 "TV" stage that is scaled to fit the window. */
+
+/* Selawik: Microsoft's free stand-in for Segoe UI (same sizes), for the Shield, which has no Segoe UI.
+   Windows keeps using the real Segoe UI. License: fonts/Selawik-LICENSE.txt */
+@font-face { font-family: "Selawik"; src: url(fonts/selawkl.woff2) format("woff2"); font-weight: 100 300; font-display: block; }
+@font-face { font-family: "Selawik"; src: url(fonts/selawksl.woff2) format("woff2"); font-weight: 301 399; font-display: block; }
+@font-face { font-family: "Selawik"; src: url(fonts/selawk.woff2) format("woff2"); font-weight: 400 500; font-display: block; }
+@font-face { font-family: "Selawik"; src: url(fonts/selawksb.woff2) format("woff2"); font-weight: 501 600; font-display: block; }
+@font-face { font-family: "Selawik"; src: url(fonts/selawkb.woff2) format("woff2"); font-weight: 601 900; font-display: block; }
 :root {
   /* --fg is the theme's text color (settings → text color); the dim shades are mixed from it */
   --fg: #fff;
@@ -445,6 +453,7 @@ html, body {
 .pg-art img { width: 100%; height: 100%; object-fit: cover; }
 .pg-art img.logo { width: 60%; height: 60%; object-fit: contain; }
 .pg-art .num { font-size: 140px; font-weight: 300; color: var(--dim); }
+.pg-art .num.name { font-size: 56px; padding: 0 24px; text-align: center; }
 .vid-info.pg-info { left: 820px; top: 330px; }
 /* portrait poster (Emby's usual guide picture): a tall frame, the text moves in beside it */
 .program-page.portrait .pg-art { width: 420px; height: 630px; }
@@ -483,6 +492,10 @@ html, body {
   box-shadow: 0 20px 60px rgba(0,0,0,.75); outline: 2px solid rgba(255,255,255,.35);
 }
 .live-page { background: transparent; }
+/* on the Shield the videos are drawn by the Shield UNDER the page: everything between them and the
+   viewer is see-through (the background picture gets windows cut into it, app.js: NV.cut) */
+html.native, html.native body, html.native #stage { background: transparent; }
+html.native .vlayer, html.native .vlayer.multi, html.native .lv-video, html.native .vod-video, html.native .vod-page { background: transparent; }
 
 /* ---------- picture in picture: one big + up to three small (app.js: Dual) ----------
    Every picture is a full-size video that's only moved and scaled from its top-left corner
@@ -800,3 +813,67 @@ html.nopointer, html.nopointer * { cursor: none !important; }
 .form.stack .opt-row { margin-left: 0; }
 .form.stack .status { margin-top: 24px; min-height: 0; }
 .form.stack .set-note { margin-top: 10px; max-width: 1300px; }
+
+/* settings → channels: the channel list under the guide options */
+.ch-list { margin-top: 10px; }
+.set-body > .set-note.ch-note { margin: 34px 0 12px 100px; }
+
+/* "up next" countdown at the end of an episode (settings → playback → next episode plays) */
+.lv-next {
+  position: absolute; right: 96px; bottom: 120px; width: 760px; padding: 34px 40px; z-index: 8;
+  background: rgba(0,0,0,.82); border-left: 6px solid var(--fg);
+}
+.lv-next .nt { font-size: 52px; line-height: 1.2; font-weight: 400; margin: 6px 0 10px; }
+
+/* settings → appearance → text size: large. The small grey text and the guide get bigger;
+   the big list words are already sized for across the room. */
+html.big-text .sc, html.big-text .row .t2.sc { font-size: 30px; }
+html.big-text .row .t2 { font-size: 34px; }
+html.big-text #clock { font-size: 40px; }
+html.big-text .gd-ch .nm { font-size: 34px; }
+html.big-text .gd-ch .num { font-size: 30px; }
+html.big-text .gd-cell .pt { font-size: 36px; }
+html.big-text .gd-cell .ps { font-size: 23px; }
+html.big-text .gd-time { font-size: 28px; }
+html.big-text .gd-info .io { font-size: 31px; }
+html.big-text .opt-row .lab { font-size: 38px; }
+html.big-text .vid-info .overview { font-size: 38px; }
+html.big-text .lv-ov > div { font-size: 36px; }
+/* settings has eight tabs: a little less space between them so "apps" fits on the screen */
+.settings-page .pivot-strip { gap: 30px; }
+
+/* ---------- more movie & tv views (side menu → layout) ---------- */
+/* the title and story above / beside the pictures */
+.vi-t { font-size: 60px; line-height: 1.15; font-weight: 300; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
+.vi-m { margin-top: 8px; }
+.vi-o { margin-top: 18px; font-size: 28px; line-height: 1.45; font-weight: 400; color: rgba(255,255,255,.85); text-shadow: 0 2px 8px rgba(0,0,0,.8);
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.vi-g { margin-top: 14px; font-size: 24px; font-weight: 400; color: var(--sub); }
+html.big-text .vi-o { font-size: 34px; }
+/* showcase */
+.showcase .sc-info { position: absolute; left: 4px; top: 10px; width: 1180px; }
+.showcase .sc-strip { position: absolute; left: 0; right: 0; bottom: 6px; overflow: hidden; }
+.showcase.sz-l .vi-o { -webkit-line-clamp: 3; }
+.showcase.sz-l .sc-info { top: 0; }
+/* wall */
+.tile.wall { background: rgba(255,255,255,.06); }
+.tile.wall .tcap { opacity: 1; padding-top: 60px; }
+.tile.wall .noimg { position: absolute; inset: 0; }
+.k-wall.sz-s .tile .tcap b { font-size: 22px; }
+/* list + details */
+.details .dt-list { right: auto; width: 900px; }
+.r-detail .t1 { font-size: 40px; }
+.details.sz-s .r-detail .t1 { font-size: 32px; }
+.details.sz-s .r-detail .t2 { display: none; }
+.details.sz-l .r-detail .t1 { font-size: 46px; }
+.dt-side { position: absolute; left: 960px; right: 0; top: 0; }
+.dt-pic { display: block; width: 300px; height: 450px; object-fit: cover; box-shadow: 0 18px 44px rgba(0,0,0,.65); background: rgba(255,255,255,.06); }
+.dt-txt { margin-top: 26px; }
+.dt-txt .vi-t { font-size: 46px; }
+.dt-txt .vi-o { -webkit-line-clamp: 3; font-size: 26px; }
+/* carousel */
+.carousel .cr-ring { position: absolute; inset: 0; }
+.carousel .tile { box-shadow: 0 18px 44px rgba(0,0,0,.65); }
+.carousel .tile.focus { scale: 1; }
+.carousel .tile .tcap { display: none; }
+.carousel .cr-cap { position: absolute; left: 200px; right: 200px; text-align: center; }

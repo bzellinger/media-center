@@ -9,3 +9,10 @@ tools/guide_cache.json
 
 __pycache__/
 *.py[cod]
+
+# The voice assistant: its own program, with private keys and passwords. Never upload it.
+Assistant/
+
+# Private sign-in details (Emby address, username, password). Never upload them.
+.env
+.env.*

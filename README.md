@@ -85,6 +85,11 @@ On **Settings**, then **Hub menu**, the instructions sit to the right of the lis
 
 ## What's new
 
+- **Movies** and **TV Shows** have four more layouts in the hidden side menu (press left at the left edge): **showcase** (the backdrop fills the screen, with the story above one row of posters), **wall** (wide scene pictures), **list + details** (titles on the left, poster and story on the right), and **carousel** (one big poster in the middle). Movies and TV Shows each remember their own choice.
+- **Radio** has the same hidden side menu: covers or list, three sizes, and the network's order or A to Z.
+- **Settings**, then **Channels**: hide channels you never watch, and mark favorites so they sit at the top of the guide. Also on that page: show or hide channel numbers, show 2, 3 or 4 hours of the guide at a time, and open the guide on the last channel you watched.
+- **Settings**, then **Appearance**: large text, a 24-hour or hidden clock, and which screen the app opens on (the home menu, any menu item, or straight to the last channel you watched).
+- **Settings**, then **Playback**: how far left and right jump in movies and shows, whether the next episode plays by itself (with a short countdown), and a sleep timer that stops everything after 15 minutes to 2 hours.
 - Live TV captions stay in reading order when a caption is more than one line.
 - **Settings**, then **YouTube**, and **Settings**, then **Apps**, are one list with headings instead of two columns.
 - **Recordings** is on the home menu. From a show in the TV guide you can record that airing or the series.

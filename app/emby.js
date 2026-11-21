@@ -13,7 +13,7 @@ window.Emby = (() => {
   } catch { deviceId = "mc-" + Date.now().toString(36); }
 
   const authHeader = () =>
-    `Emby Client="Media Center", Device="Windows", DeviceId="${deviceId}", Version="0.1.0"` +
+    `Emby Client="Media Center", Device="${window.MCAndroid ? "Shield" : "Windows"}", DeviceId="${deviceId}", Version="0.1.0"` +
     (s.userId ? `, UserId="${s.userId}"` : "") + (s.token ? `, Token="${s.token}"` : "");
 
   // accepts "192.168.1.20:8096", "http://myserver:8096/", "https://emby.example.com"
@@ -298,14 +298,16 @@ window.Emby = (() => {
   // Emby passes them along untouched), while over-the-air MPEG-2, which Emby must convert, comes out at
   // a sensible size instead of the old 40 Mbps.
   async function liveStream(channelId, { light = false } = {}) {
-    const rate = light ? 1500000 : 20000000;
+    const rate = light ? 1500000 : SHIELD ? 40000000 : 20000000; // (the Shield: room for over-the-air MPEG-2 as it is)
+    const profile = SHIELD ? SHIELD.live : BROWSER_PROFILE;
     const r = await req(`/Items/${channelId}/PlaybackInfo?` + Q({
       UserId: s.userId, StartTimeTicks: 0, IsPlayback: true, AutoOpenLiveStream: true, MaxStreamingBitrate: rate,
-    }), { method: "POST", body: { DeviceProfile: { ...BROWSER_PROFILE, MaxStreamingBitrate: rate } } });
+    }), { method: "POST", body: { DeviceProfile: { ...profile, MaxStreamingBitrate: rate } } });
     if (r && r.ErrorCode) throw new Error(lowerWords(r.ErrorCode));
     const ms = r && r.MediaSources && r.MediaSources[0];
     if (!ms) throw new Error("emby didn't offer a stream for this channel");
-    const path = ms.TranscodingUrl || `/Videos/${channelId}/master.m3u8?` + Q({ MediaSourceId: ms.Id, LiveStreamId: ms.LiveStreamId, PlaySessionId: r.PlaySessionId, DeviceId: deviceId, VideoCodec: "h264", AudioCodec: "aac", MaxAudioChannels: 2 });
+    const tp = profile.TranscodingProfiles[0];
+    const path = ms.TranscodingUrl || `/Videos/${channelId}/master.m3u8?` + Q({ MediaSourceId: ms.Id, LiveStreamId: ms.LiveStreamId, PlaySessionId: r.PlaySessionId, DeviceId: deviceId, VideoCodec: tp.VideoCodec, AudioCodec: tp.AudioCodec, MaxAudioChannels: SHIELD ? 6 : 2 });
     const url = withKey(s.server + (path.startsWith("/") ? "" : "/") + path);
     const info = { itemId: channelId, mediaSourceId: ms.Id, liveStreamId: ms.LiveStreamId, playSessionId: r.PlaySessionId, url, withKey };
     req("/Sessions/Playing", { method: "POST", body: { ItemId: channelId, MediaSourceId: ms.Id, LiveStreamId: ms.LiveStreamId, PlaySessionId: r.PlaySessionId, PlayMethod: "Transcode", CanSeek: false } }).catch(() => {});
@@ -354,12 +356,54 @@ window.Emby = (() => {
     ],
     SubtitleProfiles: [{ Format: "vtt", Method: "External" }],
   };
+  /* ---------- on the Shield (the Android app) ----------
+     The Shield's own player plays nearly anything as it is: MKV / MP4 / TS…, H.264, HEVC (10-bit HDR
+     too), VP9, MPEG-2…, and passes Dolby (Atmos), DTS and TrueHD sound to the receiver untouched.
+     The list comes from the Shield itself (its decoders + what the receiver accepts), so Emby only
+     converts what really can't play. Live tv: Emby still hands over HLS (so you can skip back), but
+     copies MPEG-2 pictures and AC-3 5.1 sound into it instead of converting them. */
+  const SHIELD = (() => {
+    if (!window.MCAndroid || !window.MCAndroid.videoCaps) return null;
+    let c; try { c = JSON.parse(window.MCAndroid.videoCaps()); } catch { return null; }
+    const v = c.video || [], a = c.audio || [];
+    const vids = v.join(","), auds = a.join(",");
+    const surround = ["ac3", "eac3"].filter(x => a.includes(x)); // what converted sound comes out as (5.1 Dolby if possible)
+    const codecProfiles = [];
+    if (v.includes("hevc")) codecProfiles.push({ Type: "Video", Codec: "hevc", Conditions: [
+      { Condition: "LessThanEqual", Property: "VideoBitDepth", Value: c.hevc10 ? "10" : "8", IsRequired: false },
+    ] });
+    return {
+      caps: c,
+      vod: {
+        MaxStreamingBitrate: 200000000, MaxStaticBitrate: 200000000, MusicStreamingTranscodingBitrate: 192000,
+        DirectPlayProfiles: [{ Container: "mkv,webm,mp4,m4v,mov,ts,m2ts,mpegts,avi", Type: "Video", VideoCodec: vids, AudioCodec: auds }],
+        TranscodingProfiles: [{
+          Container: "ts", Type: "Video", VideoCodec: ["h264", ...(v.includes("hevc") ? ["hevc"] : [])].join(","),
+          AudioCodec: [...surround, "aac", "mp3"].join(","), Context: "Streaming", Protocol: "hls",
+          MaxAudioChannels: "6", MinSegments: "1", BreakOnNonKeyFrames: true,
+        }],
+        ContainerProfiles: [], ResponseProfiles: [], CodecProfiles: codecProfiles,
+        SubtitleProfiles: [{ Format: "vtt", Method: "External" }],
+      },
+      live: {
+        MaxStreamingBitrate: 40000000, MaxStaticBitrate: 100000000, MusicStreamingTranscodingBitrate: 192000,
+        DirectPlayProfiles: [],
+        TranscodingProfiles: [{
+          Container: "ts", Type: "Video", VideoCodec: ["h264", ...["mpeg2video", "hevc"].filter(x => v.includes(x))].join(","),
+          AudioCodec: [...surround, "aac", "mp2", "mp3"].join(","), Context: "Streaming", Protocol: "hls",
+          MaxAudioChannels: "6", MinSegments: "1", BreakOnNonKeyFrames: true,
+        }],
+        ContainerProfiles: [], CodecProfiles: [], SubtitleProfiles: [], ResponseProfiles: [],
+      },
+    };
+  })();
+
   // convert: true asks Emby to convert no matter what (used when Edge choked on the file as it is)
   async function videoStream(itemId, { convert = false } = {}) {
     const r = await req(`/Items/${itemId}/PlaybackInfo?` + Q({
       UserId: s.userId, IsPlayback: true, AutoOpenLiveStream: true, MaxStreamingBitrate: 120000000,
       EnableDirectPlay: convert ? false : undefined, EnableDirectStream: convert ? false : undefined,
-    }), { method: "POST", body: { DeviceProfile: VIDEO_PROFILE } });
+    }), { method: "POST", body: { DeviceProfile: SHIELD ? SHIELD.vod : VIDEO_PROFILE } });
     if (r && r.ErrorCode) throw new Error(lowerWords(r.ErrorCode));
     const ms = r && r.MediaSources && r.MediaSources[0];
     if (!ms) throw new Error("emby didn't offer a way to play this");
@@ -416,6 +460,9 @@ window.Emby = (() => {
     shows: async () => (await items({ IncludeItemTypes: "Series", SortBy: "SortName" })).map(mapVideo),
     newEpisodes: async (n = 30) => list(await req(`/Users/${s.userId}/Items/Latest?` + Q({ IncludeItemTypes: "Episode", Limit: n, Fields: FIELDS, EnableUserData: true, GroupItems: true }))).map(mapVideo),
     seasons: async id => list(await req(`/Shows/${id}/Seasons?` + Q({ UserId: s.userId, Fields: FIELDS }))).map(i => ({ id: i.Id, name: (i.Name || "").toLowerCase(), index: i.IndexNumber })),
+    // the episode after this one (across seasons), or null at the end of the show
+    nextEpisode: async ep => list(await req(`/Shows/${ep.seriesId}/Episodes?` + Q({ UserId: s.userId, StartItemId: ep.id, Limit: 2, Fields: FIELDS, EnableUserData: true })))
+      .map(mapVideo).find(x => x.id !== ep.id) || null,
     episodes: async (showId, seasonId) => list(await req(`/Shows/${showId}/Episodes?` + Q({ UserId: s.userId, SeasonId: seasonId, Fields: FIELDS, EnableUserData: true }))).map(mapVideo),
     // live tv guide
     channels: async () => list(await req("/LiveTv/Channels?" + Q({ UserId: s.userId, EnableImages: true, ImageTypeLimit: 1, EnableImageTypes: "Primary", EnableUserData: false })))
@@ -432,7 +479,7 @@ window.Emby = (() => {
       isNew: !!(i.IsNew || i.IsPremiere), isLive: !!i.IsLive, isMovie: !!i.IsMovie,
       isSeries: !!i.IsSeries, timerId: i.TimerId || null, seriesTimerId: i.SeriesTimerId || null, // set to record?
     })),
-    liveStream, stopStream,
+    liveStream, stopStream, shieldCaps: () => SHIELD && SHIELD.caps,
     videoStream, report, artistInfo,
     // ----- being a remote-controllable player (Emby's phone app, the web page, plugins like ComSkipper) -----
     // the live connection Emby sends commands through (same device id as everything else the app sends)

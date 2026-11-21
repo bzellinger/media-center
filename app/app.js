@@ -5,12 +5,18 @@
 const EASE = "cubic-bezier(.1,.9,.2,1)";      // fast start, long soft landing
 const EASE_IN = "cubic-bezier(.6,0,.9,.45)";  // for things leaving the screen
 const EASE_HERO = "cubic-bezier(.35,0,.1,1)"; // the menu word growing into a title
+// set by the Android (Shield) app: there is no Windows helper there, the app itself does those jobs
+const NATIVE = window.MCAndroid || null;
+const HELPER = NATIVE ? "http://127.0.0.1:8765" : "";
 const $stage = document.getElementById("stage");
 const $pages = document.getElementById("pages");
 const $bgImg = document.getElementById("bgimg");
 
+// the window's real size (on Android TV innerWidth can grow with whatever sticks out past the screen)
+const viewW = () => document.documentElement.clientWidth || innerWidth;
+const viewH = () => document.documentElement.clientHeight || innerHeight;
 function fit() {
-  const s = Math.min(innerWidth / 1920, innerHeight / 1080);
+  const s = Math.min(viewW() / 1920, viewH() / 1080);
   $stage.style.transform = `translate(-50%,-50%) scale(${s})`;
 }
 addEventListener("resize", fit); fit();
@@ -90,11 +96,32 @@ Theme.apply();
 
 /* ============ playback preferences (settings → playback) ============ */
 const Prefs = {
-  DEFAULTS: { npHide: 5, npArt: "hide", liveHide: 5, osdHide: 5, guideOk: "info", musicVol: 100, saver: 60, pip: "four", cc: false, ytcc: false, ytOpen: "native" },
+  DEFAULTS: { npHide: 5, npArt: "hide", liveHide: 5, osdHide: 5, guideOk: "info", musicVol: 100, saver: 60, pip: "four", cc: false, ytcc: false, ytOpen: "native", fps: "on", guideNums: "on",
+    chHidden: [], chFav: [], guideSpan: 3, lastCh: true, startup: "home", clock: "12", textSize: "normal", nextEp: 10, skipBack: 10, skipFwd: 30 },
   load() { try { return { ...this.DEFAULTS, ...(JSON.parse(localStorage.getItem("mc.prefs")) || {}) }; } catch { return { ...this.DEFAULTS }; } },
   get(k) { return this.load()[k]; },
   set(k, v) { try { localStorage.setItem("mc.prefs", JSON.stringify({ ...this.load(), [k]: v })); } catch {} },
 };
+// the tv guide's channel label: "7.1 WKRN", or just "WKRN" when settings → playback → channel numbers in guide is off
+const guideNums = () => Prefs.get("guideNums") !== "off";
+const guideCh = ch => (guideNums() && ch.number ? `${ch.number} ${ch.name}` : ch.name);
+// settings → channels: hidden channels leave the guide (and channel up / down); favorites go to the top
+function arrangeChannels(list) {
+  const hidden = new Set(Prefs.get("chHidden") || []), fav = new Set(Prefs.get("chFav") || []);
+  const shown = list.filter(c => !hidden.has(c.id));
+  if (!shown.length) return list; // everything hidden would leave an empty guide: show them all instead
+  return [...shown.filter(c => fav.has(c.id)), ...shown.filter(c => !fav.has(c.id))];
+}
+// a channel list for the player that still contains ch, even when ch is a hidden channel (asked for by voice or the Emby app)
+function channelsWith(all, ch) {
+  const list = arrangeChannels(all);
+  return list.includes(ch) ? list : [ch, ...list];
+}
+// settings → playback: how far ← / → jump in movies, shows and youtube
+const skipBy = d => (d > 0 ? Number(Prefs.get("skipFwd")) || 30 : -(Number(Prefs.get("skipBack")) || 10));
+// settings → appearance → text size
+function applyTextSize() { document.documentElement.classList.toggle("big-text", Prefs.get("textSize") === "large"); }
+applyTextSize();
 
 // small message at the bottom of the screen
 let toastTimer = null;
@@ -110,7 +137,7 @@ function toast(text) {
 /* ============ the Zune-style motion ============ */
 // Only animate what's actually on screen (and inside its list's visible window).
 function visibleT(root) {
-  const W = innerWidth, H = innerHeight;
+  const W = viewW(), H = viewH();
   return qa(root, ".t").filter(e => {
     const r = e.getBoundingClientRect();
     if (!r.width && !r.height) return false;
@@ -587,6 +614,7 @@ function Message(text, height = 760) {
 // Zune HD text style: song / album / movie titles keep their normal capitalization;
 // artist and album names are bold caps; small info lines are small caps (via CSS).
 const ROW = {
+  station: st => el("div", "r-album", `${coverTag(st)}<div class="tx"><div class="t1 caps">${esc(st.title)}</div><div class="t2 sc">${esc(st.desc || "")}</div></div>`),
   artist: a => el("div", "r-artist", `<span class="pb">${ICON.play}</span><div class="cap">${esc(a.name)}</div>`),
   album: al => el("div", "r-album", `${coverTag(al)}<div class="tx"><div class="t1 caps">${esc(al.title)}</div><div class="t2 sc">${esc(al.artist.name)}</div></div>`),
   albumYear: al => el("div", "r-album", `${coverTag(al)}<div class="tx"><div class="t1 caps">${esc(al.title)}</div><div class="t2 sc">${[al.year, al.count ? al.count + " songs" : al.tracks ? al.tracks.length + " songs" : ""].filter(Boolean).join(" · ")}</div></div>`),
@@ -642,7 +670,7 @@ ROW.video = v => el("div", "r-video", `${v.img ? imgTag(v.img, "pt") : `<div cla
 const VIEW_SIZES = [["s", "small"], ["m", "medium"], ["l", "large"]];
 const VIEW_KINDS = {
   video: {
-    layouts: [["posters", "posters"], ["list", "list"]],
+    layouts: [["posters", "posters"], ["list", "list"], ["showcase", "showcase"], ["wall", "wall"], ["details", "list + details"], ["carousel", "carousel"]],
     sorts: [["title:asc", "title a–z"], ["title:desc", "title z–a"], ["year:desc", "year · newest"], ["year:asc", "year · oldest"], ["added:desc", "recently added"], ["score:desc", "top rated"]],
     grid: { s: { cols: 10, w: 146, h: 219, gap: 20 }, m: { cols: 8, w: 186, h: 279, gap: 22 }, l: { cols: 6, w: 250, h: 375, gap: 28 } },
     cell: CELL.poster, row: ROW.video, rowH: { s: 100, m: 140, l: 190 },
@@ -658,6 +686,12 @@ const VIEW_KINDS = {
     sorts: [["title:asc", "name a–z"], ["title:desc", "name z–a"]],
     grid: { s: { cols: 9, w: 160, h: 214, gap: 24 }, m: { cols: 7, w: 220, h: 276, gap: 30 }, l: { cols: 5, w: 290, h: 348, gap: 40 } },
     cell: CELL.artist, row: ROW.artist, rowH: { s: 80, m: 96, l: 120 },
+  },
+  station: {
+    layouts: [["posters", "covers"], ["list", "list"]],
+    sorts: [["default", "network order"], ["title:asc", "name a–z"], ["title:desc", "name z–a"]],
+    grid: { s: { cols: 9, w: 166, h: 166, gap: 22 }, m: { cols: 7, w: 220, h: 220, gap: 24 }, l: { cols: 5, w: 300, h: 300, gap: 30 } },
+    cell: CELL.station, row: st => ROW.station(st), rowH: { s: 100, m: 130, l: 170 },
   },
   homevideo: {
     layouts: [["posters", "thumbnails"], ["list", "list"]],
@@ -679,7 +713,7 @@ const Views = {
   set(key, v) { const a = this.all(); a[key] = v; try { localStorage.setItem("mc.views", JSON.stringify(a)); } catch {} },
   // the items in the chosen order (only where sorting makes sense: not "recent" or "continue")
   sorted(items, views, v) {
-    if (!views.sort) return items;
+    if (!views.sort || v.sort === "default") return items; // ("default": the order it came in, e.g. a radio network's own)
     const [field, dir] = v.sort.split(":"), m = dir === "desc" ? -1 : 1;
     const name = x => String(x.sortName || x.title || x.name || "").toLowerCase();
     const val = x => field === "year" ? Number(x.year) || 0 : field === "added" ? Date.parse(x.added || "") || 0
@@ -694,7 +728,10 @@ const Views = {
   },
   make(kind, v, items, focus) {
     const K = VIEW_KINDS[kind];
+    if (!K.layouts.some(([m]) => m === v.mode)) v = { ...v, mode: "posters" }; // a layout this area doesn't offer
     if (v.mode === "list") return List({ items, itemH: K.rowH[v.size] || K.rowH.m, row: K.row, focus });
+    const special = { showcase: Showcase, wall: Wall, details: Details, carousel: Carousel }[v.mode];
+    if (special) return special({ items, size: v.size, focus });
     const g = K.grid[v.size] || K.grid.m;
     const L = Grid({ items, ...g, cell: K.cell, focus });
     L.el.classList.add("sz-" + v.size, "k-" + kind);
@@ -702,6 +739,143 @@ const Views = {
   },
 };
 const posterGrid = (items, focus) => Grid({ items, cols: 8, w: 186, h: 279, gap: 22, cell: CELL.poster, focus });
+
+/* ============ more ways to see movies & tv (the side menu's layout choices) ============
+   Each returns the same little interface as List and Grid (el, index, item, atTop, move, moveX).
+   Showcase, details and carousel also offer bg(): the picked title's backdrop fills the screen
+   behind them, and onFocus (set by the page) is called whenever the pick changes. */
+const BODY_W = 1728; // the width the views have (1920 minus the margins)
+// title · year · length · rating for the info beside or above the pictures
+function videoTitle(v) { return v.type === "Episode" && v.seriesName ? v.seriesName : v.title; }
+function videoMeta(v) {
+  return [v.type === "Episode" ? `s${v.season || "?"} e${v.episode || "?"} · ${v.title}` : v.type === "Series" ? "" : v.year,
+    v.runtime ? fmtLong(v.runtime) : "", v.rating, v.score ? `${v.score} ★` : "",
+    v.played ? "watched" : v.resume > 60 ? "in progress" : ""].filter(Boolean).join(" · ");
+}
+function videoInfoHtml(v) {
+  if (!v) return "";
+  const genres = (v.genres || []).slice(0, 3).join(" · ").toLowerCase();
+  return `<div class="vi-t">${esc(videoTitle(v))}</div><div class="vi-m sc">${esc(videoMeta(v))}</div>` +
+    `<div class="vi-o">${esc(v.overview || "")}</div>${genres ? `<div class="vi-g">${esc(genres)}</div>` : ""}`;
+}
+const backdropOf = v => (v && (v.backdrop || v.img)) ? { src: v.backdrop || v.img, opacity: 0.6 } : null;
+
+// Showcase: the backdrop fills the screen, the title and story sit on top, one row of posters along the bottom.
+function Showcase({ items, size, focus = 0, height = 760 }) {
+  const P = { s: { w: 150, h: 225, gap: 20 }, m: { w: 186, h: 279, gap: 24 }, l: { w: 230, h: 345, gap: 28 } }[size] || { w: 186, h: 279, gap: 24 };
+  const view = el("div", "list showcase sz-" + size); view.style.height = height + "px";
+  const info = el("div", "sc-info t");
+  const strip = el("div", "sc-strip"); strip.style.height = P.h + 44 + "px";
+  const inner = el("div", "grid-inner"); strip.append(inner);
+  view.append(info, strip);
+  const step = P.w + P.gap, vis = Math.max(1, Math.floor((BODY_W - 28 + P.gap) / step));
+  const tiles = items.map((it, i) => {
+    const t = CELL.poster(it); t.classList.add("tile", "t");
+    Object.assign(t.style, { left: 14 + i * step + "px", top: "22px", width: P.w + "px", height: P.h + "px" });
+    inner.append(t); return t;
+  });
+  let f = clamp(focus, 0, Math.max(0, items.length - 1)), sc = 0;
+  function paint(anim) {
+    tiles.forEach((t, i) => t.classList.toggle("focus", i === f));
+    if (f < sc + 1) sc = f - 1;
+    if (f > sc + vis - 2) sc = f - vis + 2;
+    sc = clamp(sc, 0, Math.max(0, items.length - vis));
+    inner.style.transition = anim ? `transform 380ms ${EASE}` : "none";
+    inner.style.transform = `translateX(${-sc * step}px)`;
+    info.innerHTML = videoInfoHtml(items[f]);
+  }
+  paint(false);
+  const api = {
+    el: view,
+    get index() { return f; }, get atTop() { return true; }, get item() { return items[f]; },
+    move() {}, // one row: up goes to the section names, down does nothing
+    moveX(d) {
+      const n = f + d;
+      if (n < 0 || n >= items.length) return false;
+      f = n; paint(true); if (api.onFocus) api.onFocus(); return true;
+    },
+    bg() { return backdropOf(items[f]); },
+  };
+  return api;
+}
+
+// Wall: wide scene pictures in a grid (the backdrop, or the episode still, instead of the tall poster).
+CELL.wall = v => el("div", "wall", `${v.backdrop || v.thumb || v.img ? imgTag(v.backdrop || v.thumb || v.img) : `<div class="noimg"></div>`}` +
+  `<div class="tcap"><b>${esc(videoTitle(v))}</b><span>${esc(videoMeta(v))}</span></div>`);
+function Wall({ items, size, focus = 0 }) {
+  const g = { s: { cols: 4, w: 408, h: 230, gap: 24 }, m: { cols: 3, w: 544, h: 306, gap: 28 }, l: { cols: 2, w: 828, h: 466, gap: 36 } }[size] || { cols: 3, w: 544, h: 306, gap: 28 };
+  const L = Grid({ items, ...g, cell: CELL.wall, focus });
+  L.el.classList.add("sz-" + size, "k-wall");
+  return L;
+}
+
+// List + details: titles down the left, the picked one's poster and story on the right.
+ROW.detail = v => el("div", "r-detail", `<div class="tx"><div class="t1">${esc(videoTitle(v))}</div><div class="t2 sc">${esc(videoMeta(v))}</div></div>`);
+function Details({ items, size, focus = 0, height = 760 }) {
+  const H = { s: 72, m: 96, l: 124 }[size] || 96;
+  const L = List({ items, itemH: H, row: ROW.detail, focus, height });
+  L.el.classList.add("dt-list");
+  const view = el("div", "list details sz-" + size); view.style.height = height + "px";
+  const side = el("div", "dt-side t");
+  view.append(L.el, side);
+  const show = () => {
+    const v = L.item;
+    side.innerHTML = v ? `${v.img ? imgTag(v.img, "dt-pic") : `<div class="dt-pic none"></div>`}<div class="dt-txt">${videoInfoHtml(v)}</div>` : "";
+  };
+  show();
+  const api = {
+    el: view,
+    get index() { return L.index; }, get atTop() { return L.atTop; }, get item() { return L.item; },
+    move(d) { const before = L.index; L.move(d); if (L.index !== before) { show(); if (api.onFocus) api.onFocus(); } },
+    moveX() { return false; },
+    bg() { return backdropOf(L.item); },
+  };
+  return api;
+}
+
+// Carousel: one big poster in the middle; the ones beside it shrink and fade away to either side.
+function Carousel({ items, size, focus = 0, height = 760 }) {
+  const P = { s: { w: 236, h: 354 }, m: { w: 286, h: 429 }, l: { w: 330, h: 495 } }[size] || { w: 286, h: 429 };
+  const view = el("div", "list carousel sz-" + size); view.style.height = height + "px";
+  const ring = el("div", "cr-ring"), cap = el("div", "cr-cap t");
+  view.append(ring, cap);
+  const x0 = (BODY_W - P.w) / 2;
+  const tiles = items.map(it => {
+    const t = CELL.poster(it); t.classList.add("tile", "t");
+    Object.assign(t.style, { left: x0 + "px", top: "16px", width: P.w + "px", height: P.h + "px" });
+    ring.append(t); return t;
+  });
+  cap.style.top = P.h + 64 + "px";
+  let f = clamp(focus, 0, Math.max(0, items.length - 1));
+  function paint(anim) {
+    tiles.forEach((t, i) => {
+      const o = i - f, a = Math.abs(o);
+      if (a > 6) { t.style.visibility = "hidden"; t.style.transition = "none"; t.style.transform = `translateX(${Math.sign(o) * BODY_W}px) scale(.4)`; return; }
+      const x = a === 0 ? 0 : Math.sign(o) * (P.w * 0.78 + (a - 1) * P.w * 0.5);
+      t.style.visibility = "";
+      t.style.transition = anim ? `transform 420ms ${EASE}, opacity 420ms` : "none";
+      t.style.transform = `translateX(${x}px) scale(${1 - Math.min(a, 4) * 0.16})`;
+      t.style.opacity = String(1 - Math.min(a, 5) * 0.17);
+      t.style.zIndex = String(20 - a);
+      t.classList.toggle("focus", a === 0);
+    });
+    const v = items[f];
+    cap.innerHTML = v ? `<div class="vi-t">${esc(videoTitle(v))}</div><div class="vi-m sc">${esc(videoMeta(v))}</div>` : "";
+  }
+  paint(false);
+  const api = {
+    el: view,
+    get index() { return f; }, get atTop() { return true; }, get item() { return items[f]; },
+    move() {},
+    moveX(d) {
+      const n = f + d;
+      if (n < 0 || n >= items.length) return false;
+      f = n; paint(true); if (api.onFocus) api.onFocus(); return true;
+    },
+    bg() { return backdropOf(items[f]); },
+  };
+  return api;
+}
 
 function playAndShow(tracks, i) {
   if (!tracks || !tracks[i]) return;
@@ -907,7 +1081,7 @@ class PivotPage extends Page {
     this.paintZone();
     return root;
   }
-  bg() { return this.bgInfo || super.bg(); }
+  bg() { const b = this.list && this.list.bg && this.list.bg(); return b || this.bgInfo || super.bg(); }
   order(start) { return this.sections.map((_, i) => (start + i) % this.sections.length); }
   renderStrip(order, on) {
     this.strip.innerHTML = "";
@@ -936,6 +1110,7 @@ class PivotPage extends Page {
       const v = Views.get(s.views.key, s.views.kind);
       s.shown = Views.sorted(s.data, s.views, v);
       this.list = Views.make(s.views.kind, v, s.shown, this.focus[s.name] || 0);
+      this.hookBg();
     } else {
       s.shown = s.data;
       this.list = s.view(s.data, this.focus[s.name] || 0);
@@ -943,6 +1118,15 @@ class PivotPage extends Page {
     return this.list;
   }
 
+  // views with a backdrop (showcase, details, carousel): the background follows the picked title
+  hookBg() {
+    const L = this.list;
+    if (L && L.bg) L.onFocus = () => {
+      clearTimeout(this.bgT);
+      this.bgT = setTimeout(() => { if (top() === this && this.list === L) applyBg(this); }, 220);
+    };
+    if (this.el && top() === this) applyBg(this);
+  }
   // ----- the hidden view menu (see Views) -----
   openDrawer() {
     const s = this.sections[this.pv], K = VIEW_KINDS[s.views.kind], v = Views.get(s.views.key, s.views.kind);
@@ -991,6 +1175,7 @@ class PivotPage extends Page {
     const L = Views.make(s.views.kind, v, s.shown, Math.max(0, s.shown.indexOf(item)));
     const old = this.list.el;
     old.replaceWith(L.el); this.list = L;
+    this.hookBg();
     turnIn(visibleT(L.el), 1, { stagger: 22, dur: 420 });
   }
   drawerKey(k) {
@@ -1305,7 +1490,7 @@ const Radio = {
   // song changes (opened without the helper, it plays directly and falls back to slower checks).
   track(st) {
     const k = encodeURIComponent(this.key), host = `prem1.${st.net.domain}`, key = encodeURIComponent(st.key);
-    const via = location.protocol.startsWith("http") ? u => "/radio/stream?url=" + encodeURIComponent(u) : u => u;
+    const via = location.protocol.startsWith("http") ? u => HELPER + "/radio/stream?url=" + encodeURIComponent(u) : u => u;
     return {
       id: `radio:${st.net.id}:${st.id}`, title: st.title, live: true, station: st, dur: 0,
       artist: { name: st.net.name, hue: st.hue, photo: st.img },
@@ -1359,7 +1544,7 @@ const Radio = {
         if (!mine()) return clearInterval(this.fast);
         if (!Player.playing) return;
         const cur = new URL(t.stream, location.href).searchParams.get("url") || direct; // (a backup address may be in use)
-        const m = await fetch("/radio/now?url=" + encodeURIComponent(cur), { headers: { "X-Media-Center": "1" }, cache: "no-store" })
+        const m = await fetch(HELPER + "/radio/now?url=" + encodeURIComponent(cur), { headers: { "X-Media-Center": "1" }, cache: "no-store" })
           .then(r => r.ok ? r.json() : null).catch(() => null);
         if (!m || !m.raw || !mine() || (t.icy && t.icy.raw === m.raw)) return;
         t.icy = m;
@@ -1378,7 +1563,7 @@ function radioPage() {
   return new PivotPage({
     title: "radio", heroName: "radio",
     sections: RADIO_NETWORKS.map(net => ({
-      name: net.name, load: () => Radio.channels(net), view: stationGrid,
+      name: net.name, load: () => Radio.channels(net), view: stationGrid, views: { key: "radio", kind: "station", sort: true },
       open: (st, i, list) => {
         if (!Radio.key) return toast("add your radio listen key in settings → radio");
         Player.play(list.map(s => Radio.track(s)), i);
@@ -1665,6 +1850,10 @@ function SearchView(items, focus) {
 /* ============ youtube (VacuumTube, started by the Media Center helper) ============ */
 const Apps = {
   async call(path, body) {
+    if (NATIVE) { // on the Shield, "youtube" hands over to the YouTube app (or SmartTube)
+      if (path === "/apps/youtube/launch") return NATIVE.openYouTube() ? { ok: true } : { error: "no youtube app found on this device" };
+      return { server: false };
+    }
     try {
       const r = await fetch(path, {
         method: body ? "POST" : "GET",
@@ -1933,6 +2122,9 @@ class GuidePage extends Page {
     this.T0 = Math.floor(now / HALF) * HALF;   // the guide starts at the current half hour…
     this.t0 = this.T0;                          // …and this is where the visible 3 hours begin
     this.ft = now;                              // "focus time": which show is picked when moving up/down
+    // settings → channels → guide time span: 2, 3 or 4 hours across the same width
+    const hours = clamp(Number(Prefs.get("guideSpan")) || 3, 2, 4);
+    G.span = hours * HOUR; G.hourPx = 1404 / hours;
   }
   get live() { return Emby.connected; }
   render() {
@@ -1960,7 +2152,7 @@ class GuidePage extends Page {
     if (this.channels === undefined) {
       this.msg.textContent = "loading the guide…";
       Promise.resolve().then(() => this.live ? Emby.channels() : SampleGuide.channels())
-        .then(c => { this.channels = c; }, e => { this.channels = null; this.err = e.message; })
+        .then(c => { this.channels = arrangeChannels(c); }, e => { this.channels = null; this.err = e.message; })
         .then(() => {
           if (!this.el) return;
           if (!this.channels) { this.msg.textContent = "couldn't load the channels — " + lower(this.err); return; }
@@ -1968,7 +2160,9 @@ class GuidePage extends Page {
           this.msg.textContent = this.live ? "" : "sample guide — sign in to emby in settings to see your channels";
           this.msg.classList.toggle("note", !this.live);
           // tv playing? start on that channel (a few rows down, so the ones above it show too)
-          const on = Live.active && Live.ch ? this.channels.findIndex(c => c.id === Live.ch.id) : -1;
+          // tv off: settings → channels → start on last channel puts the highlight on the one you watched last
+          const lastId = Live.active && Live.ch ? Live.ch.id : Prefs.get("lastCh") && Prefs.get("lastChId");
+          const on = lastId ? this.channels.findIndex(c => c.id === lastId) : -1;
           if (on >= 0) { this.ci = on; this.top = Math.max(0, Math.min(on - 2, this.channels.length - G.rows)); }
           this.renderRows(); this.layout(false);
           turnIn(qa(this.el, ".gd-row, .gd-ch"), 1, { stagger: 30, dur: 480 });
@@ -2017,7 +2211,7 @@ class GuidePage extends Page {
     for (let i = lo; i < hi; i++) {
       const ch = this.channels[i], y = i * G.rowH + "px";
       const c = el("div", "gd-ch t" + (i === this.ci ? " focus" : ""),
-        `${ch.img ? imgTag(ch.img, "logo") : ""}<div class="num">${esc(ch.number)}</div><div class="nm">${esc(ch.name)}</div>`);
+        `${ch.img ? imgTag(ch.img, "logo") : ""}${guideNums() ? `<div class="num">${esc(ch.number)}</div>` : ""}<div class="nm">${esc(ch.name)}</div>`);
       c.style.top = y; this.chY.append(c);
       const row = el("div", "gd-row t"); row.style.top = y;
       const ps = this.progs.get(ch.id);
@@ -2051,9 +2245,9 @@ class GuidePage extends Page {
     const flags = p ? [p.isNew ? "new" : "", p.isLive ? "live" : "", p.isMovie ? "movie" : "", p.start <= now && p.end > now ? "on now" : ""].filter(Boolean) : [];
     this.info.innerHTML = p
       ? `<div class="it">${esc(p.title)}${p.ep ? `<span> · ${esc(p.ep)}</span>` : ""}</div>
-         <div class="sc">${esc(ch.number)} ${esc(ch.name)} · ${clock12(p.start)} – ${clock12(p.end)}${flags.length ? " · " + flags.join(" · ") : ""}</div>
+         <div class="sc">${esc(guideCh(ch))} · ${clock12(p.start)} – ${clock12(p.end)}${flags.length ? " · " + flags.join(" · ") : ""}</div>
          <div class="io">${esc(p.overview)}</div>`
-      : `<div class="it">${esc(ch.name)}</div><div class="sc">${esc(ch.number)} · no guide information</div>`;
+      : `<div class="it">${esc(ch.name)}</div><div class="sc">${guideNums() && ch.number ? esc(ch.number) + " · " : ""}no guide information</div>`;
   }
   layout(anim) {
     const tr = anim ? `transform 420ms ${EASE}` : "none";
@@ -2115,12 +2309,12 @@ class ProgramPage extends Page {
     const r = el("div", "program-page");
     r.append(el("div", "sec-title z", "tv guide"),
       el("div", "alb-head zs", `<div class="an">${esc(p ? p.title : ch.name)}</div><div class="sc">${
-        [`${esc(ch.number)} ${esc(ch.name)}`, p ? `${clock12(p.start)} – ${clock12(p.end)}` : "", when, watching ? "watching" : ""].filter(Boolean).join(" · ")}</div>`));
+        [esc(guideCh(ch)), p ? `${clock12(p.start)} – ${clock12(p.end)}` : "", when, watching ? "watching" : ""].filter(Boolean).join(" · ")}</div>`));
     // Emby's guide pictures are usually portrait posters; the frame takes the picture's own shape
     // (portrait unless Emby says it's wide), and corrects itself once the picture has loaded
     r.classList.toggle("portrait", !!(p && p.img && !(p.aspect > 1)));
     const pic = el("div", "pg-art flip");
-    pic.innerHTML = p && p.img ? imgTag(p.img) : ch.img ? imgTag(ch.img, "logo") : `<div class="num">${esc(ch.number)}</div>`;
+    pic.innerHTML = p && p.img ? imgTag(p.img) : ch.img ? imgTag(ch.img, "logo") : (guideNums() ? `<div class="num">${esc(ch.number)}</div>` : `<div class="num name">${esc(ch.name)}</div>`);
     const im = pic.querySelector("img:not(.logo)");
     if (im) im.addEventListener("load", () => r.classList.toggle("portrait", im.naturalWidth < im.naturalHeight));
     r.append(pic);
@@ -2380,6 +2574,124 @@ class SeriesPage extends Page {
    - "behind": full screen behind the menus, dimmed so they stay readable
    - "corner": a small window in the lower right, above the menus
    Which background style is used is a setting (settings -> tv behind menus). */
+/* ============ the Shield's own video player ============
+   On the Shield (the Android app) videos don't play in the page: the Shield's player (ExoPlayer)
+   plays them, passing Atmos / DTS / TrueHD to the receiver and HDR to the TV. Each picture is a
+   video surface UNDER the page. nativeVideo() makes a stand-in for a <video> element (same commands:
+   src, play, pause, currentTime, volume, events…) that sits where the picture should be; every
+   frame the page tells the Shield where each stand-in is (so pictures follow the app's animations)
+   and cuts a see-through window into the background there. */
+const NV = {
+  els: new Map(), n: 0, running: false, sent: "",
+  state(list) { list.forEach(s => { const e = this.els.get(s.id); if (e) e._nvState(s); }); },
+  event(id, type, data) { const e = this.els.get(id); if (e) e._nvEvent(type, data); },
+  start() { if (!this.running) { this.running = true; requestAnimationFrame(() => this.frame()); } },
+  frame() {
+    const out = [], holes = [];
+    for (const [id, e] of this.els) {
+      const r = e.getBoundingClientRect();
+      let a = e.isConnected ? 1 : 0;
+      for (let n = e; n && a > 0 && n !== document.documentElement; n = n.parentElement) {
+        const cs = getComputedStyle(n);
+        if (cs.visibility === "hidden" || cs.display === "none") a = 0; else a *= +cs.opacity;
+      }
+      out.push([id, +r.x.toFixed(1), +r.y.toFixed(1), +r.width.toFixed(1), +r.height.toFixed(1), +a.toFixed(2)]);
+      if (a > 0.02 && r.width > 1) holes.push(r);
+    }
+    const j = JSON.stringify(out);
+    if (j !== this.sent) { this.sent = j; NATIVE.videoLayout(j); this.cut(holes); }
+    if (this.els.size) requestAnimationFrame(() => this.frame()); else { this.running = false; this.sent = ""; this.cut([]); }
+  },
+  // the background picture gets see-through windows where the videos are (everything else in the
+  // page is already transparent there)
+  cut(rs) {
+    const bg = document.getElementById("bg");
+    if (!bg) return;
+    if (!rs.length) { bg.style.clipPath = ""; return; }
+    const sr = $stage.getBoundingClientRect(), k = sr.width / 1920 || 1, f = n => +n.toFixed(1);
+    const d = rs.map(r => `M${f((r.x - sr.x) / k)} ${f((r.y - sr.y) / k)}h${f(r.width / k)}v${f(r.height / k)}h${f(-r.width / k)}z`).join("");
+    bg.style.clipPath = `path(evenodd, "M-10 -10H1930V1090H-10Z${d}")`;
+  },
+};
+if (NATIVE) {
+  window.__nv = NV;
+  document.documentElement.classList.add("native");
+  try { NATIVE.matchFrameRate(Prefs.get("fps") !== "off"); } catch {}
+}
+// vod: a movie / episode / recording (the TV may switch to its frame rate), not live tv
+function nativeVideo(cls, vod) {
+  const e = el("div", cls + " nv"), id = ++NV.n;
+  let src = "", paused = true, pos = 0, at = 0, playing = false, dur = NaN, buf = 0, liveEnd = null, vol = 1, muted = false, ended = false, w = 0, h = 0;
+  const track = { kind: "captions", label: "cc1", language: "en", mode: "hidden", activeCues: [], oncuechange: null };
+  const fire = t => e.dispatchEvent(new Event(t));
+  const sendVol = () => { if (src) NATIVE.videoVolume(id, muted ? 0 : vol); };
+  const range = (a, b) => ({ length: b > a ? 1 : 0, start: () => a, end: () => b });
+  const now = () => playing ? pos + (performance.now() - at) / 1000 : pos;
+  const release = () => {
+    if (!src) return;
+    NATIVE.videoRelease(id); NV.els.delete(id);
+    src = ""; paused = true; playing = false; pos = 0; dur = NaN; buf = 0; liveEnd = null; ended = false; w = h = 0;
+    track.activeCues = []; if (track.oncuechange) track.oncuechange();
+  };
+  e._nvState = s => {
+    pos = s.pos; at = performance.now(); playing = s.playing; buf = s.buf || 0; w = s.w; h = s.h;
+    liveEnd = s.live ? s.liveEnd : null;
+    dur = s.live ? Infinity : s.dur || NaN;
+    if (!s.pwr && !paused && !ended) { paused = true; fire("pause"); } // paused by the Shield (app sent to the background)
+    fire("timeupdate");
+  };
+  e._nvEvent = (type, data) => {
+    if (type === "cues") {
+      track.activeCues = (data.cues || []).map(c => ({ text: c.text, line: c.line, startTime: performance.now() / 1000 }));
+      if (track.oncuechange) track.oncuechange();
+      return;
+    }
+    if (type === "ended") { ended = true; playing = false; }
+    if (type === "playing") ended = false;
+    if (type === "error") {
+      const msg = lower(String((data && data.message) || "").replace(/^ERROR_CODE_/, "").replace(/_/g, " "));
+      e.error = { message: msg };
+      if (e._onFail) e._onFail(msg);
+    }
+    if (type === "loadedmetadata") fire("durationchange");
+    fire(type);
+  };
+  Object.defineProperties(e, {
+    native: { value: true },
+    src: {
+      get: () => src,
+      set: u => {
+        if (!u) return release();
+        src = String(u); paused = true; ended = false; pos = 0; dur = NaN;
+        NV.els.set(id, e); NV.start();
+        NATIVE.videoLoad(id, src, !!vod); sendVol();
+      },
+    },
+    paused: { get: () => paused },
+    ended: { get: () => ended },
+    currentTime: {
+      get: () => { const t = now(); return isFinite(dur) ? Math.min(t, dur) : t; },
+      set: t => { t = Math.max(0, +t || 0); pos = t; at = performance.now(); ended = false; if (src) NATIVE.videoSeek(id, t); fire("seeking"); },
+    },
+    duration: { get: () => dur },
+    seekable: { get: () => liveEnd != null ? range(0, liveEnd) : range(0, isFinite(dur) ? dur : 0) },
+    buffered: { get: () => range(0, buf) },
+    volume: { get: () => vol, set: v => { vol = Math.max(0, Math.min(1, +v || 0)); sendVol(); } },
+    muted: { get: () => muted, set: m => { muted = !!m; sendVol(); } },
+    textTracks: { value: [track] },
+    videoWidth: { get: () => w },
+    videoHeight: { get: () => h },
+    readyState: { get: () => (src && (playing || pos > 0 || isFinite(dur)) ? 4 : 0) },
+  });
+  e.play = () => { paused = false; if (src) NATIVE.videoPlay(id); fire("play"); return Promise.resolve(); };
+  e.pause = () => { if (paused) return; paused = true; if (src) NATIVE.videoPause(id); fire("pause"); };
+  e.load = () => {};
+  e.canPlayType = () => "probably";
+  e.removeAttribute = n => { if (n === "src") release(); else Element.prototype.removeAttribute.call(e, n); };
+  e.remove = () => { release(); Element.prototype.remove.call(e); };
+  return e;
+}
+
 const Live = {
   active: false, guide: null, i: 0, gen: 0, hls: null, stream: null, statusText: "", recovered: false,
   get ch() { return this.guide && this.guide.channels ? this.guide.channels[this.i] : null; },
@@ -2410,6 +2722,7 @@ const Live = {
   async tune(guide, i) {
     this.guide = guide; this.i = i;
     const gen = ++this.gen, ch = this.ch;
+    if (ch) Prefs.set("lastChId", ch.id); // for settings → channels → start on last channel
     this.release();
     this.active = true;
     // tv takes over the sound: radio stops completely (a live station can't pick up where it left
@@ -2456,6 +2769,15 @@ function playStream(v, info) {
     if (hls && hls === Live.hls) return Live.setStatus(text);
     const p = Dual.smalls.find(x => x.hls === hls); if (p) Dual.status(p, text);
   };
+  if (v.native) { // the Shield plays it itself
+    v._onFail = msg => {
+      const text = "the stream stopped" + (msg ? " — " + msg : "");
+      if (v === Live.video) return Live.setStatus(text);
+      const p = Dual.smalls.find(x => x.video === v); if (p) Dual.status(p, text);
+    };
+    v.src = info.url; v.play();
+    return null;
+  }
   if (window.Hls && Hls.isSupported()) {
     let recovered = false;
     const hls = new Hls({
@@ -2515,7 +2837,7 @@ const MAIN = {
   gen: 0, main: true,
 };
 function newVideo() {
-  const v = el("video", "lv-video"); v.playsInline = true;
+  const v = NATIVE ? nativeVideo("lv-video", false) : el("video", "lv-video"); v.playsInline = true;
   v.addEventListener("playing", () => {
     if (v === Live.video) { Live.setStatus(""); emitLive("playing"); }
     const p = Dual.smalls.find(x => x.video === v); if (p) Dual.status(p, "");
@@ -3226,7 +3548,7 @@ class VodPage extends LivePage {
   render() {
     const r = super.render();
     r.classList.add("vod-page");
-    this.video = el("video", "vod-video"); this.video.playsInline = true;
+    this.video = NATIVE ? nativeVideo("vod-video", true) : el("video", "vod-video"); this.video.playsInline = true;
     r.prepend(this.video);
     return r;
   }
@@ -3254,7 +3576,7 @@ class VodPage extends LivePage {
     catch (e) { if (this.el && gen === this.startGen) this.status("couldn't start this — " + lower(e.message)); return; }
     if (!this.el || gen !== this.startGen) { Emby.report("stop", info, from, true); return; } // left meanwhile
     this.info = info;
-    if (info.hls && window.Hls && Hls.isSupported()) {
+    if (info.hls && !v.native && window.Hls && Hls.isSupported()) {
       let recovered = false;
       const hls = this.hls = new Hls({ startPosition: from || -1, xhrSetup: (xhr, url) => { const u = info.withKey(url); if (u !== url) xhr.open("GET", u, true); } });
       hls.on(Hls.Events.ERROR, (e, d) => {
@@ -3295,6 +3617,7 @@ class VodPage extends LivePage {
     this.start(this.lastFrom, true).finally(() => { this.fixing = false; });
   }
   unmount() {
+    if (this.nextUp) { clearInterval(this.nextUp.timer); this.nextUp = null; }
     this.startGen++; // a start still on its way is dropped
     clearInterval(this.reportTimer);
     const v = this.video;
@@ -3345,7 +3668,7 @@ class VodPage extends LivePage {
   }
   press(id) {
     if (id === "play") return this.togglePause();
-    if (id === "rw" || id === "ff") return this.seek(id === "ff" ? 30 : -10);
+    if (id === "rw" || id === "ff") return this.seek(skipBy(id === "ff" ? 1 : -1));
     if (id === "start") { this.video.currentTime = 0; this.glyph("start"); this.fill(); return; }
     if (id === "stop") return back();
     if (id === "info") {
@@ -3358,17 +3681,43 @@ class VodPage extends LivePage {
     this.done = true;
     clearInterval(this.reportTimer);
     if (this.info) Emby.report("stop", this.info, this.dur, false); // the end: Emby marks it watched
-    if (top() === this) back();
+    if (top() !== this) return;
+    // settings → playback → next episode plays: count down, then the next episode takes this screen's place
+    const secs = Number(Prefs.get("nextEp")) || 0, v = this.v;
+    if (!secs || v.type !== "Episode" || v.rec || !v.seriesId) return back();
+    Emby.nextEpisode(v).then(next => (next ? this.upNext(next, secs) : back()), () => back());
+  }
+  upNext(next, secs) {
+    if (!this.el || top() !== this) return;
+    this.status("");
+    const box = el("div", "lv-next");
+    this.el.append(box);
+    let left = secs;
+    const show = () => { box.innerHTML = `<div class="sc">up next in ${left}</div><div class="nt">${esc(next.title)}</div><div class="sc">season ${next.season || "?"} · episode ${next.episode || "?"} — enter plays now · back stops</div>`; };
+    show();
+    this.nextUp = { next, timer: setInterval(() => { if (--left <= 0) this.playNext(); else show(); }, 1000) };
+  }
+  playNext() {
+    const n = this.nextUp; if (!n) return;
+    clearInterval(n.timer); this.nextUp = null;
+    if (top() === this) go(new VodPage(n.next, n.next.resume > 60 ? n.next.resume : 0), { replace: true });
+  }
+  cancelNext() {
+    const n = this.nextUp; if (!n) return false;
+    clearInterval(n.timer); this.nextUp = null;
+    back();
+    return true;
   }
   playKey() { this.togglePause(); return true; }
-  skip(dir) { this.seek(dir > 0 ? 30 : -10); } // (voice: "skip ahead / back")
+  skip(dir) { this.seek(skipBy(dir)); } // (voice: "skip ahead / back")
   changeChannel() {}
   mediaKey(k) {
     if (k === "stop") { back(); return true; }
-    if (k === "next" || k === "prev") { this.seek(k === "next" ? 30 : -10); return true; }
+    if (k === "next" || k === "prev") { this.seek(skipBy(k === "next" ? 1 : -1)); return true; }
     return false;
   }
   key(k) {
+    if (this.nextUp) { if (k === "ok") this.playNext(); else if (k === "back") this.cancelNext(); return true; }
     if (k === "back") {
       if (this.infoOpen()) { this.q(".lv-osd").classList.remove("info"); this.arm("osdHide"); return true; }
       if (this.mode === "controls") { this.setMode("hidden"); return true; }
@@ -3381,7 +3730,7 @@ class VodPage extends LivePage {
       return true;
     }
     if (k === "ok") { this.bi = VOD_PLAY; this.controls(); return true; }
-    if (k === "left" || k === "right") { this.seek(k === "right" ? 30 : -10); return true; }
+    if (k === "left" || k === "right") { this.seek(skipBy(k === "right" ? 1 : -1)); return true; }
     return true;
   }
 }
@@ -3535,7 +3884,7 @@ class YtPage extends LivePage {
   }
   press(id) {
     if (id === "play") return this.togglePause();
-    if (id === "rw" || id === "ff") return this.seek(id === "ff" ? 30 : -10);
+    if (id === "rw" || id === "ff") return this.seek(skipBy(id === "ff" ? 1 : -1));
     if (id === "start") { if (this.ready) this.player.seekTo(0, true); this.glyph("start"); return; }
     if (id === "stop") return back();
     if (id === "cc") {
@@ -3551,11 +3900,11 @@ class YtPage extends LivePage {
     this.fill();
   }
   playKey() { this.togglePause(); return true; }
-  skip(dir) { this.seek(dir > 0 ? 30 : -10); }
+  skip(dir) { this.seek(skipBy(dir)); }
   changeChannel() {}
   mediaKey(k) {
     if (k === "stop") { back(); return true; }
-    if (k === "next" || k === "prev") { this.seek(k === "next" ? 30 : -10); return true; }
+    if (k === "next" || k === "prev") { this.seek(skipBy(k === "next" ? 1 : -1)); return true; }
     return false;
   }
   key(k) {
@@ -3572,7 +3921,7 @@ class YtPage extends LivePage {
       return true;
     }
     if (k === "ok") { this.bi = YT_PLAY; this.controls(); return true; }
-    if (k === "left" || k === "right") { this.seek(k === "right" ? 30 : -10); return true; }
+    if (k === "left" || k === "right") { this.seek(skipBy(k === "right" ? 1 : -1)); return true; }
     return true;
   }
 }
@@ -3619,6 +3968,9 @@ const SETTINGS_TABS = [
       { label: "text color", values: () => Theme.COLORS.map(c => [c[0], c[0]]), get: () => Theme.fg, set: v => { Theme.save({ fg: v }); Theme.apply(); } },
       { label: "background", values: () => Art.walls.map(w => [w, w]), get: () => Theme.bg, set: v => { Theme.save({ bg: v }); Theme.apply(); } },
       { label: "tv behind menus", values: () => [["behind", "full screen"], ["corner", "small corner window"]], get: () => Live.bgMode, set: v => { Live.bgMode = v; } },
+      { label: "text size", values: () => [["normal", "normal"], ["large", "large"]], get: () => Prefs.get("textSize"), set: v => { Prefs.set("textSize", v); applyTextSize(); } },
+      { label: "clock", values: () => [["12", "12-hour"], ["24", "24-hour"], ["off", "hidden"]], get: () => Prefs.get("clock"), set: v => { Prefs.set("clock", v); clock(); } },
+      { label: "start on", values: () => [["home", "home menu"], ...MENU_ALL.map(id => [id, lower(MENU_LABEL[id] || id)]), ["live", "last channel watched"]], get: () => Prefs.get("startup"), set: v => Prefs.set("startup", v) },
     ],
   },
   {
@@ -3629,11 +3981,19 @@ const SETTINGS_TABS = [
       { label: "album art when info hides", values: () => [["hide", "hide it"], ["center", "move to the middle"]], get: () => Prefs.get("npArt"), set: v => Prefs.set("npArt", v) },
       { label: "live tv info hides after", values: () => SECONDS([0, 3, 5, 8, 10]), get: () => Prefs.get("liveHide"), set: v => Prefs.set("liveHide", v) },
       { label: "player controls hide after", values: () => SECONDS([0, 3, 5, 8, 10, 15]), get: () => Prefs.get("osdHide"), set: v => Prefs.set("osdHide", v) },
-      { label: "guide enter", values: () => [["info", "show info first"], ["tune", "tune right away"]], get: () => Prefs.get("guideOk"), set: v => Prefs.set("guideOk", v) },
+      { label: "skip back (←)", values: () => [5, 10, 15, 30].map(n => [n, `${n} seconds`]), get: () => Number(Prefs.get("skipBack")), set: v => Prefs.set("skipBack", v) },
+      { label: "skip ahead (→)", values: () => [10, 15, 30, 60].map(n => [n, `${n} seconds`]), get: () => Number(Prefs.get("skipFwd")), set: v => Prefs.set("skipFwd", v) },
+      { label: "next episode plays", values: () => [[0, "off"], [5, "after 5 seconds"], [10, "after 10 seconds"], [20, "after 20 seconds"]], get: () => Number(Prefs.get("nextEp")), set: v => Prefs.set("nextEp", v) },
+      { label: "sleep timer", values: () => Sleep.values(), get: () => Sleep.mins, set: v => Sleep.set(v) },
       { label: "picture in picture", values: () => [["four", "one big + three small"], ["two", "side by side (2 channels)"]], get: () => Prefs.get("pip"), set: v => Prefs.set("pip", v) },
       { label: "music volume", values: () => [100, 80, 60, 40].map(n => [n, `${n}%`]), get: () => Prefs.get("musicVol"), set: v => { Prefs.set("musicVol", v); Volume.apply(); } },
+      ...(NATIVE ? [{ // the Shield switches the TV to the film's frame rate (no judder on 24p films)
+        label: "match frame rate", values: () => [["on", "on (movies & shows)"], ["off", "off"]],
+        get: () => Prefs.get("fps"), set: v => { Prefs.set("fps", v); NATIVE.matchFrameRate(v !== "off"); },
+      }] : []),
     ],
   },
+  { name: "channels", build: "channels" },
   { name: "radio", build: "radio" },
   { name: "youtube", build: "youtube" },
   { name: "apps", build: "apps" },
@@ -3676,7 +4036,7 @@ class SettingsPage extends Page {
     this.libsEl = null;
     this.rows = []; this.statusEl = null; this.vaStatusEl = null;
     const t = SETTINGS_TABS[this.tab];
-    const build = { emby: () => this.buildEmby(), menu: () => this.buildMenu(), radio: () => this.buildRadio(), youtube: () => this.buildYouTube(), apps: () => this.buildApps() };
+    const build = { emby: () => this.buildEmby(), menu: () => this.buildMenu(), channels: () => this.buildChannels(), radio: () => this.buildRadio(), youtube: () => this.buildYouTube(), apps: () => this.buildApps() };
     this.items = t.options ? this.buildOptions(t.options) : build[t.build]();
     this.f = clamp(this.f, 0, this.items.length - 1);
     this.paint();
@@ -3755,6 +4115,41 @@ class SettingsPage extends Page {
     this.body.append(el("div", "set-note side t", "← → moves an item up or down the menu<br>enter shows or hides it<br>settings always stays last"));
     return rows;
   }
+  // channels: the guide options, then every channel — Enter (or ← →) goes shown → favorite → hidden
+  buildChannels() {
+    const opts = this.buildOptions([
+      { label: "channel numbers in guide", values: () => [["on", "show"], ["off", "hide"]], get: () => Prefs.get("guideNums"), set: v => Prefs.set("guideNums", v) },
+      { label: "guide shows", values: () => [2, 3, 4].map(n => [n, `${n} hours at a time`]), get: () => Number(Prefs.get("guideSpan")), set: v => Prefs.set("guideSpan", v) },
+      { label: "guide enter", values: () => [["info", "show info first"], ["tune", "tune right away"]], get: () => Prefs.get("guideOk"), set: v => Prefs.set("guideOk", v) },
+      { label: "guide opens on", values: () => [[true, "last channel watched"], [false, "the first channel"]], get: () => !!Prefs.get("lastCh"), set: v => Prefs.set("lastCh", v) },
+    ]);
+    this.body.append(el("div", "set-note ch-note t", Emby.connected ? "your channels — enter: shown → favorite (top of the guide) → hidden" : "sample channels — sign in to emby to set up your own"));
+    const box = el("div", "ch-list"); this.body.append(box);
+    const tab = this.tab;
+    Promise.resolve().then(() => Emby.connected ? Emby.channels() : SampleGuide.channels()).then(chans => {
+      if (!this.el || this.tab !== tab || !box.isConnected) return;
+      const rows = chans.map(ch => {
+        const row = el("div", "opt-row t", `<div class="lab">${esc([ch.number, ch.name].filter(Boolean).join("  "))}</div><div class="btn"></div>`);
+        row.chId = ch.id; this.showChannel(row); box.append(row); return row;
+      });
+      this.items = [...opts, ...rows]; this.paint();
+    }, e => { if (box.isConnected) box.append(el("div", "set-note t", "couldn't load the channels — " + esc(lower(e.message)))); });
+    return opts;
+  }
+  showChannel(row) {
+    const id = row.chId, hidden = (Prefs.get("chHidden") || []).includes(id), fav = (Prefs.get("chFav") || []).includes(id);
+    row.querySelector(".btn").textContent = hidden ? "hidden" : fav ? "★ favorite" : "shown";
+    row.classList.toggle("off", hidden);
+  }
+  cycleChannel(row, dir) {
+    const id = row.chId, without = k => (Prefs.get(k) || []).filter(x => x !== id);
+    const states = ["shown", "fav", "hidden"];
+    const cur = (Prefs.get("chHidden") || []).includes(id) ? 2 : (Prefs.get("chFav") || []).includes(id) ? 1 : 0;
+    const next = states[(cur + dir + 3) % 3];
+    Prefs.set("chHidden", next === "hidden" ? [...without("chHidden"), id] : without("chHidden"));
+    Prefs.set("chFav", next === "fav" ? [...without("chFav"), id] : without("chFav"));
+    this.showChannel(row);
+  }
   moveMenu(id, d) {
     const layout = menuLayout(), i = layout.findIndex(([x]) => x === id), j = i + d;
     if (j < 0 || j >= layout.length) return;
@@ -3794,7 +4189,7 @@ class SettingsPage extends Page {
     sec("menu");
     const orow = el("div", "opt-row t", `<div class="lab">youtube opens in</div><div class="btn"></div>`);
     orow.opt = {
-      label: "youtube opens in", values: () => [["native", "the media center"], ["vacuumtube", "vacuumtube"]],
+      label: "youtube opens in", values: () => [["native", "the media center"], ["vacuumtube", NATIVE ? "the youtube app" : "vacuumtube"]],
       get: () => Prefs.get("ytOpen") === "vacuumtube" ? "vacuumtube" : "native", set: v => Prefs.set("ytOpen", v),
     };
     form.append(orow); this.showValue(orow);
@@ -3853,6 +4248,7 @@ class SettingsPage extends Page {
   buildApps() {
     const form = el("div", "form stack"); this.body.append(form);
     const sec = t => form.append(el("div", "set-sec t", esc(t)));
+    if (NATIVE) return this.buildAppsShield(form, sec);
     sec("vacuumtube (youtube fallback)");
     this.vals.ytPath = this.vals.ytPath || "";
     const field = this.makeField({ id: "ytPath", label: "vacuumtube.exe location", ph: "e.g. C:\\Users\\you\\AppData\\Local\\Programs\\VacuumTube\\VacuumTube.exe" }, form);
@@ -3881,6 +4277,19 @@ class SettingsPage extends Page {
       this.vaStatus(st.running ? "running" : st.ready ? "set up — not running right now" : "not set up yet", st.running ? "ok" : "");
     });
     return [field, ...btns, vfield, ...vbtns];
+  }
+  // the Shield: youtube hands over to the YouTube app; the voice assistant (on the PC with the mic)
+  // sends its commands to this Shield instead of to the PC
+  buildAppsShield(form, sec) {
+    sec("youtube app");
+    const btns = this.makeButtons(form, [{ id: "testYt", label: "open it" }]);
+    form.append(el("div", "set-note t", "the shield's youtube app (or smarttube). used when settings → youtube says so."));
+    sec("voice assistant");
+    const addr = (() => { try { return NATIVE.helperAddress(); } catch { return ""; } })();
+    form.append(el("div", "set-note t", addr
+      ? `in the voice assistant's settings, set ZUNE_URL to  ${esc(addr)}  — it then sends its commands to this shield.`
+      : "this shield isn't on the home network right now."));
+    return btns;
   }
   vaStatus(text, kind = "") {
     const e = this.vaStatusEl;
@@ -3982,6 +4391,8 @@ class SettingsPage extends Page {
       return k === "up";
     }
     const it = this.items[this.f];
+    if (it && it.chId && (k === "left" || k === "right" || k === "ok")) { this.cycleChannel(it, k === "left" ? -1 : 1); return true; }
+    if (!it && (k === "left" || k === "right" || k === "ok" || k === "down")) return true; // (a tab still loading)
     if (it && it.menuId) { // hub menu rows
       if (k === "left" || k === "right") { this.moveMenu(it.menuId, k === "left" ? -1 : 1); return true; }
       if (k === "ok") { this.toggleMenu(it.menuId); return true; }
@@ -4343,11 +4754,35 @@ function idle() {
   if (pending) { const k = pending; pending = null; handle(k, false); }
 }
 
+/* ============ sleep timer (settings → playback) ============
+   Stops whatever is playing after the chosen time. It isn't saved: it's for tonight only. */
+const Sleep = {
+  mins: 0, at: 0, timer: null,
+  values() {
+    const left = this.mins ? Math.max(1, Math.round((this.at - Date.now()) / 60e3)) : 0;
+    return [[0, "off"], ...[15, 30, 60, 90, 120].map(n => [n, this.mins === n ? `on — ${left} min left` : `${n} minutes`])];
+  },
+  set(m) {
+    clearTimeout(this.timer);
+    this.mins = m; this.at = m ? Date.now() + m * 60e3 : 0;
+    if (m) { this.timer = setTimeout(() => this.fire(), m * 60e3); toast(`sleep timer: everything stops in ${m} minutes`); }
+  },
+  fire() {
+    this.mins = 0; this.at = 0;
+    const p = top();
+    if (p instanceof VodPage || p instanceof YtPage) back();
+    Live.stop();
+    if (Player.playing) Player.toggle();
+    toast("sleep timer — good night");
+  },
+};
+
 /* ============ clock ============ */
 const $clock = document.getElementById("clock");
 function clock() {
-  const d = new Date();
-  $clock.textContent = `${d.getHours() % 12 || 12}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const d = new Date(), style = Prefs.get("clock"); // settings → appearance → clock
+  $clock.style.display = style === "off" ? "none" : "";
+  $clock.textContent = `${style === "24" ? String(d.getHours()).padStart(2, "0") : d.getHours() % 12 || 12}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 clock(); setInterval(clock, 10000);
 
@@ -4421,9 +4856,9 @@ async function tuneChannel(q) {
   const ch = chans.find(c => c.number && norm(c.number) === norm(q)) || bestMatch(chans, q, c => c.name);
   if (!ch) throw new Error(`channel ${q} not found`);
   const g = new GuidePage(); // used as the channel list / listings holder for the player
-  g.channels = chans;
+  g.channels = channelsWith(chans, ch);
   await settled();
-  go(new LivePage(g, chans.indexOf(ch)), { replace: top() instanceof LivePage });
+  go(new LivePage(g, g.channels.indexOf(ch)), { replace: top() instanceof LivePage });
   return ch;
 }
 
@@ -4644,8 +5079,27 @@ RPC["UI.ActivateView"] = RPC["GUI.ActivateWindow"];
 
 // keeps asking the helper for the next voice command (long-poll), runs it and sends back the answer
 const VoiceLink = {
+  async run(cmd) {
+    if (!/^(JSONRPC\.Ping|Player\.GetItem|Application\.GetProperties|PVR\.GetChannels|Player\.GetLyrics|Guide\.Refresh)$/.test(cmd.method)) { Saver.poke(); Saver.hide(); } // a voice command wakes the screen
+    try {
+      const fn = RPC[cmd.method];
+      if (!fn) throw new Error(`unknown command ${cmd.method}`);
+      return { id: cmd.id, result: await fn(cmd.params || {}) };
+    } catch (e) {
+      return { id: cmd.id, error: { code: -32000, message: lower(e.message || String(e)) } };
+    }
+  },
   async start() {
     if (location.protocol === "file:") return; // opened directly: no helper, no voice
+    if (NATIVE) { // the Shield's built-in helper hands each command straight to the page
+      window.__voice = async (id, method, params) => {
+        const reply = await this.run({ id, method, params });
+        let text; try { text = JSON.stringify(reply); } catch { text = JSON.stringify({ id, error: { message: "couldn't send the answer" } }); }
+        NATIVE.voiceReply(id, text);
+      };
+      NATIVE.voiceReady();
+      return;
+    }
     const H = { "X-Media-Center": "1" };
     for (;;) {
       let cmd;
@@ -4655,15 +5109,7 @@ const VoiceLink = {
         cmd = await r.json();
       } catch { await wait(3000); continue; }
       if (!cmd || cmd.id == null) continue;
-      if (!/^(JSONRPC\.Ping|Player\.GetItem|Application\.GetProperties|PVR\.GetChannels|Player\.GetLyrics)$/.test(cmd.method)) { Saver.poke(); Saver.hide(); } // a voice command wakes the screen
-      let reply;
-      try {
-        const fn = RPC[cmd.method];
-        if (!fn) throw new Error(`unknown command ${cmd.method}`);
-        reply = { id: cmd.id, result: await fn(cmd.params || {}) };
-      } catch (e) {
-        reply = { id: cmd.id, error: { code: -32000, message: lower(e.message || String(e)) } };
-      }
+      const reply = await this.run(cmd);
       fetch("/jsonrpc/result", { method: "POST", headers: { ...H, "Content-Type": "application/json" }, body: JSON.stringify(reply) }).catch(() => {});
     }
   },
@@ -4684,7 +5130,8 @@ const GuideFeed = {
       }));
     }
     const body = { channels: chans.map(c => ({ Id: c.id, Name: c.name, ChannelNumber: c.number })), programs };
-    await fetch("/guide/cache", { method: "POST", headers: { "X-Media-Center": "1", "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (NATIVE) NATIVE.guideCache(JSON.stringify(body));
+    else await fetch("/guide/cache", { method: "POST", headers: { "X-Media-Center": "1", "Content-Type": "application/json" }, body: JSON.stringify(body) });
     return { count: programs.length };
   },
   start() {
@@ -4743,8 +5190,8 @@ const Remote = {
       if (cmd === "Seek") p.seekTo(at);
       else if (cmd === "Pause" && !paused || cmd === "Unpause" && paused || cmd === "PlayPause") p.togglePause();
       else if (cmd === "Stop") back();
-      else if (cmd === "FastForward" || cmd === "NextTrack") p.seek(30);
-      else if (cmd === "Rewind" || cmd === "PreviousTrack") p.seek(-10);
+      else if (cmd === "FastForward" || cmd === "NextTrack") p.seek(skipBy(1));
+      else if (cmd === "Rewind" || cmd === "PreviousTrack") p.seek(skipBy(-1));
       return;
     }
     if (Live.active) {
@@ -4798,8 +5245,8 @@ const Remote = {
     } else if (r.kind === "channel") {
       const chans = await channelList(), ch = chans.find(c => c.id === r.list[0].id);
       if (!ch) return toast("that channel isn't in the guide");
-      const g = new GuidePage(); g.channels = chans;
-      go(new LivePage(g, chans.indexOf(ch)), { replace: top() instanceof LivePage });
+      const g = new GuidePage(); g.channels = channelsWith(chans, ch);
+      go(new LivePage(g, g.channels.indexOf(ch)), { replace: top() instanceof LivePage });
     } else if (r.kind === "photo") go(new PhotoPage(r.list, 0, "pictures"));
     else if (r.kind === "show") openShow(r.list[0]);
   },
@@ -4929,6 +5376,16 @@ Live.init();
 Saver.init();
 loadQuickplay();
 go(new Home());
+// settings → appearance → start on: open a section (or the last channel) instead of the home menu
+(async () => {
+  const where = Prefs.get("startup");
+  if (!where || where === "home") return;
+  await wait(900); // let the home menu finish coming in
+  try {
+    if (where === "live") { if (Prefs.get("lastChId")) { const ch = (await channelList()).find(c => c.id === Prefs.get("lastChId")); if (ch) await tuneChannel(ch.number || ch.name); } }
+    else if (menuItems().includes(where)) await openSection(where);
+  } catch {}
+})();
 VoiceLink.start(); // voice commands from the assistant
 GuideFeed.start(); // guide copy for "what's on" questions
 if (location.protocol !== "file:") Tube.account().catch(() => {}); // signed in to a youtube account? (adds subscriptions etc.)
