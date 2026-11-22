@@ -85,6 +85,7 @@ On **Settings**, then **Hub menu**, the instructions sit to the right of the lis
 
 ## What's new
 
+- **TV Guide** has tabs: **guide · movies · shows · sports**. **Movies** lists every movie on your channels in the next two weeks, **shows** and **sports** what's on this week. Press left at the left edge to sort (for movies: by year, air date or title) or switch between posters and a list. Enter opens the details with watch and record. A red dot means it's already set to record. The guide's info line now shows the title and time only (the description is on the show's page), which keeps six channels on screen.
 - **Movies** and **TV Shows** have four more layouts in the hidden side menu (press left at the left edge): **showcase** (the backdrop fills the screen, with the story above one row of posters), **wall** (wide scene pictures), **list + details** (titles on the left, poster and story on the right), and **carousel** (one big poster in the middle). Movies and TV Shows each remember their own choice.
 - **Radio** has the same hidden side menu: covers or list, three sizes, and the network's order or A to Z.
 - **Settings**, then **Channels**: hide channels you never watch, and mark favorites so they sit at the top of the guide. Also on that page: show or hide channel numbers, show 2, 3 or 4 hours of the guide at a time, and open the guide on the last channel you watched.

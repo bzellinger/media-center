@@ -139,10 +139,13 @@ window.Emby = (() => {
   const artist = artistsOf(new Map());
 
   const mapAlbum = i => {
-    const a = (i.AlbumArtists && i.AlbumArtists[0]) || {};
+    // the album artist; files tagged with only a plain "artist" leave that empty in Emby, so fall back to it
+    // (otherwise those albums show as "unknown artist")
+    const a = (i.AlbumArtists && i.AlbumArtists[0]) || (i.ArtistItems && i.ArtistItems[0]) || {};
+    const name = i.AlbumArtist || a.Name || (i.Artists && i.Artists[0]);
     return {
       id: i.Id, title: i.Name || "", year: i.ProductionYear || "", count: i.ChildCount || 0,
-      artist: artist(a.Id, i.AlbumArtist || a.Name), hue: hashHue(i.Name || i.Id), emby: true, sortName: i.SortName || "",
+      artist: artist(a.Id, name), hue: hashHue(i.Name || i.Id), emby: true, sortName: i.SortName || "",
       imgs: artList(
         img(i.Id, i.ImageTags && i.ImageTags.Primary),
         img(i.PrimaryImageItemId, i.PrimaryImageTag),
@@ -267,6 +270,17 @@ window.Emby = (() => {
     resume: secs(i.UserData && i.UserData.PlaybackPositionTicks), played: !!(i.UserData && i.UserData.Played),
     seriesId: i.SeriesId, seriesName: i.SeriesName || "", episode: i.IndexNumber, season: i.ParentIndexNumber,
     hue: hashHue(i.Name || i.Id), emby: true, sortName: i.SortName || "", added: i.DateCreated || "",
+  });
+  // one airing in the tv guide
+  const PROGRAM_FIELDS = "Overview,Genres,PrimaryImageAspectRatio,ProductionYear";
+  const mapProgram = i => ({
+    id: i.Id, channelId: i.ChannelId, title: i.Name || "", ep: i.EpisodeTitle || "",
+    start: date(i.StartDate), end: date(i.EndDate), overview: i.Overview || "", genres: i.Genres || [],
+    img: img(i.Id, i.ImageTags && i.ImageTags.Primary, "Primary", 720),
+    aspect: i.PrimaryImageAspectRatio || 0, // guide pictures are usually portrait posters (about 0.67)
+    isNew: !!(i.IsNew || i.IsPremiere), isLive: !!i.IsLive, isMovie: !!i.IsMovie, year: i.ProductionYear || "", // (a movie's release year)
+    isSeries: !!i.IsSeries, isSports: !!i.IsSports, timerId: i.TimerId || null, seriesTimerId: i.SeriesTimerId || null, // set to record?
+    score: i.CommunityRating || 0,
   });
   const mapNamed = i => ({ id: i.Id, name: (i.Name || "").toLowerCase(), count: i.ChildCount || 0, emby: true });
 
@@ -470,15 +484,15 @@ window.Emby = (() => {
       .sort((a, b) => (parseFloat(a.number) || 1e9) - (parseFloat(b.number) || 1e9) || a.name.localeCompare(b.name)),
     programs: async (ids, from, to) => list(await req("/LiveTv/Programs?" + Q({
       UserId: s.userId, ChannelIds: ids.join(","), MinEndDate: new Date(from).toISOString(), MaxStartDate: new Date(to).toISOString(),
-      SortBy: "StartDate", Fields: "Overview,Genres,PrimaryImageAspectRatio", EnableImages: true, ImageTypeLimit: 1, EnableUserData: false,
-    }))).map(i => ({
-      id: i.Id, channelId: i.ChannelId, title: i.Name || "", ep: i.EpisodeTitle || "",
-      start: date(i.StartDate), end: date(i.EndDate), overview: i.Overview || "", genres: i.Genres || [],
-      img: img(i.Id, i.ImageTags && i.ImageTags.Primary, "Primary", 720),
-      aspect: i.PrimaryImageAspectRatio || 0, // guide pictures are usually portrait posters (about 0.67)
-      isNew: !!(i.IsNew || i.IsPremiere), isLive: !!i.IsLive, isMovie: !!i.IsMovie,
-      isSeries: !!i.IsSeries, timerId: i.TimerId || null, seriesTimerId: i.SeriesTimerId || null, // set to record?
-    })),
+      SortBy: "StartDate", Fields: PROGRAM_FIELDS, EnableImages: true, ImageTypeLimit: 1, EnableUserData: false,
+    }))).map(mapProgram),
+    // tv guide → movies / shows / sports: what's airing on every channel over the next days (shows: one per series)
+    upcoming: async (kind, days) => list(await req("/LiveTv/Programs?" + Q({
+      UserId: s.userId, MinEndDate: new Date().toISOString(), MaxStartDate: new Date(Date.now() + days * 864e5).toISOString(),
+      SortBy: "StartDate", Fields: PROGRAM_FIELDS, EnableImages: true, ImageTypeLimit: 1, EnableUserData: false, Limit: 8000,
+      ...(kind === "movie" ? { IsMovie: true } : kind === "sports" ? { IsSports: true }
+        : { IsSeries: true, IsMovie: false, IsSports: false, GroupProgramsBySeries: true }),
+    }))).map(mapProgram),
     liveStream, stopStream, shieldCaps: () => SHIELD && SHIELD.caps,
     videoStream, report, artistInfo,
     // ----- being a remote-controllable player (Emby's phone app, the web page, plugins like ComSkipper) -----

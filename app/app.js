@@ -117,7 +117,7 @@ function channelsWith(all, ch) {
   const list = arrangeChannels(all);
   return list.includes(ch) ? list : [ch, ...list];
 }
-// settings → playback: how far ← / → jump in movies, shows and youtube
+// settings → playback: how far ← / → (and the skip buttons) jump in live tv, movies, shows and youtube
 const skipBy = d => (d > 0 ? Number(Prefs.get("skipFwd")) || 30 : -(Number(Prefs.get("skipBack")) || 10));
 // settings → appearance → text size
 function applyTextSize() { document.documentElement.classList.toggle("big-text", Prefs.get("textSize") === "large"); }
@@ -319,7 +319,7 @@ const Player = {
     } else { audio.pause(); audio.removeAttribute("src"); }
     Radio.watch(t); // radio: keep the song / artist / cover up to date
   },
-  play(q, i) { Live.stop(); this.queue = q; this.i = i; this.playing = true; this.load(); emit("track", 1); }, // music stops live tv
+  play(q, i) { Live.stop(); BgVod.stop(); this.queue = q; this.i = i; this.playing = true; this.load(); emit("track", 1); }, // music stops live tv
   toggle() {
     if (!this.track) return;
     this.playing = !this.playing;
@@ -501,6 +501,8 @@ function applyBg(p) {
   // live tv playing full screen behind the menus replaces the background picture
   Live.place(p);
   if (Live.active && Live.modeFor(p) !== "corner") { $bgImg.style.opacity = 0; return; }
+  BgVod.place(p);
+  if (BgVod.active && Live.bgMode !== "corner") { $bgImg.style.opacity = 0; return; } // a movie playing behind the menus
   if (src !== bgSrc) {
     bgSrc = src;
     $bgImg.style.opacity = 0;
@@ -662,6 +664,23 @@ ROW.media = x => el("div", `r-media ${x.kind}`, `<div class="pic">${x.kind === "
 ROW.video = v => el("div", "r-video", `${v.img ? imgTag(v.img, "pt") : `<div class="pt none"></div>`}<div class="tx"><div class="t1">${esc(v.type === "Episode" && v.seriesName ? v.seriesName : v.title)}</div><div class="t2 sc">${
   esc([v.type === "Episode" ? `s${v.season || "?"} e${v.episode || "?"} · ${v.title}` : v.year, v.runtime ? fmtLong(v.runtime) : "", v.rating, v.score ? v.score + " ★" : ""].filter(Boolean).join(" · "))}</div></div>`);
 
+// tv guide → movies / shows / sports: one upcoming airing (the soonest), with when and where it's on
+function airText(p) {
+  const now = Date.now();
+  if (p.start <= now && p.end > now) return "on now";
+  const d = new Date(p.start), today = new Date(); today.setHours(0, 0, 0, 0);
+  const days = Math.floor((d - today) / 864e5);
+  const day = days <= 0 ? "today" : days === 1 ? "tomorrow" : days < 7 ? d.toLocaleDateString([], { weekday: "short" }).toLowerCase()
+    : d.toLocaleDateString([], { month: "short", day: "numeric" }).toLowerCase();
+  return `${day} ${clock12(p.start)}`;
+}
+const progWhere = p => [airText(p), p.ch && p.ch.name, p.airings > 1 ? `+${p.airings - 1} more` : ""].filter(Boolean).join(" · ");
+const progRec = p => !!(p.timerId || p.anyRec || p.seriesTimerId);
+CELL.program = p => el("div", "poster", `${p.img ? imgTag(p.img) : `<div class="noimg">${esc(p.title)}</div>`}${progRec(p) ? `<span class="recmark"></span>` : ""}` +
+  `<div class="tcap"><b>${esc(progTitle(p))}</b><span>${esc(progWhere(p))}</span></div>`);
+ROW.program = p => el("div", "r-detail r-program", `<div class="tx"><div class="t1">${esc(progTitle(p))}${progRec(p) ? ` <span class="recdot">●</span>` : ""}</div>` +
+  `<div class="t2 sc">${esc([progWhere(p), !p.isMovie && p.ep ? p.ep : "", p.isNew ? "new" : ""].filter(Boolean).join(" · "))}</div></div>`);
+
 /* ============ view options: the hidden side menu (like the old hub) ============
    On pages that have it (movies, tv shows, music albums & artists), pressing ← at the left edge of
    the covers slides a menu in from the left: layout (posters / list), size (small / medium / large)
@@ -693,6 +712,25 @@ const VIEW_KINDS = {
     grid: { s: { cols: 9, w: 166, h: 166, gap: 22 }, m: { cols: 7, w: 220, h: 220, gap: 24 }, l: { cols: 5, w: 300, h: 300, gap: 30 } },
     cell: CELL.station, row: st => ROW.station(st), rowH: { s: 100, m: 130, l: 170 },
   },
+  // tv guide tabs
+  tvmovie: {
+    layouts: [["posters", "posters"], ["list", "list"]],
+    sorts: [["start:asc", "air date · soonest"], ["year:asc", "year · oldest"], ["year:desc", "year · newest"], ["title:asc", "title a–z"], ["title:desc", "title z–a"]],
+    grid: { s: { cols: 10, w: 146, h: 219, gap: 20 }, m: { cols: 8, w: 186, h: 279, gap: 22 }, l: { cols: 6, w: 250, h: 375, gap: 28 } },
+    cell: CELL.program, row: ROW.program, rowH: { s: 96, m: 110, l: 140 },
+  },
+  tvshow: {
+    layouts: [["posters", "posters"], ["list", "list"]],
+    sorts: [["title:asc", "title a–z"], ["start:asc", "air date · soonest"], ["title:desc", "title z–a"]],
+    grid: { s: { cols: 10, w: 146, h: 219, gap: 20 }, m: { cols: 8, w: 186, h: 279, gap: 22 }, l: { cols: 6, w: 250, h: 375, gap: 28 } },
+    cell: CELL.program, row: ROW.program, rowH: { s: 96, m: 110, l: 140 },
+  },
+  tvsport: {
+    layouts: [["list", "list"], ["posters", "posters"]],
+    sorts: [["start:asc", "air date · soonest"], ["title:asc", "title a–z"]],
+    grid: { s: { cols: 10, w: 146, h: 219, gap: 20 }, m: { cols: 8, w: 186, h: 279, gap: 22 }, l: { cols: 6, w: 250, h: 375, gap: 28 } },
+    cell: CELL.program, row: ROW.program, rowH: { s: 96, m: 110, l: 140 },
+  },
   homevideo: {
     layouts: [["posters", "thumbnails"], ["list", "list"]],
     sorts: [["date:desc", "newest first"], ["date:asc", "oldest first"], ["title:asc", "name a–z"], ["title:desc", "name z–a"], ["added:desc", "recently added"]],
@@ -709,19 +747,20 @@ const VIEW_KINDS = {
 const Views = {
   all() { try { return JSON.parse(localStorage.getItem("mc.views") || "{}"); } catch { return {}; } },
   // (the starting sort is the first one offered: title for movies, newest first for home videos & pictures)
-  get(key, kind) { return { mode: "posters", size: "m", sort: kind ? VIEW_KINDS[kind].sorts[0][0] : "title:asc", ...(this.all()[key] || {}) }; },
+  get(key, kind) { return { mode: kind ? VIEW_KINDS[kind].layouts[0][0] : "posters", size: "m", sort: kind ? VIEW_KINDS[kind].sorts[0][0] : "title:asc", ...(this.all()[key] || {}) }; },
   set(key, v) { const a = this.all(); a[key] = v; try { localStorage.setItem("mc.views", JSON.stringify(a)); } catch {} },
   // the items in the chosen order (only where sorting makes sense: not "recent" or "continue")
   sorted(items, views, v) {
     if (!views.sort || v.sort === "default") return items; // ("default": the order it came in, e.g. a radio network's own)
     const [field, dir] = v.sort.split(":"), m = dir === "desc" ? -1 : 1;
     const name = x => String(x.sortName || x.title || x.name || "").toLowerCase();
-    const val = x => field === "year" ? Number(x.year) || 0 : field === "added" ? Date.parse(x.added || "") || 0
+    const val = x => field === "start" ? x.start || 0 : field === "year" ? Number(x.year) || 0 : field === "added" ? Date.parse(x.added || "") || 0
       : field === "date" ? x.when || Date.parse(x.added || "") || 0
       : field === "score" ? x.score || 0 : field === "artist" ? String((x.artist && x.artist.name) || "").toLowerCase() : name(x);
     return items.slice().sort((a, b) => {
       if (views.folders && a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1; // folders stay first
       const A = val(a), B = val(b);
+      if (field === "year" && (!A || !B) && A !== B) return A ? -1 : 1; // no year known: at the end, either way round
       const c = typeof A === "string" ? A.localeCompare(B) : A - B;
       return c * m || name(a).localeCompare(name(b));
     });
@@ -950,8 +989,10 @@ class Home extends Page {
     const qp = this.qp;
     qp.innerHTML = "";
     const title = s => s.replace(/\b\w/g, c => c.toUpperCase()); // "new music" -> "New Music", like "Pins" / "History"
+    this.qpLabels = [];
+    this.qpScroll = 0; qp.style.translate = "";
     this.rows = (quick.rows || []).map(([label, list]) => {
-      qp.append(el("div", "qp-label t", esc(title(label))));
+      const lab = el("div", "qp-label t", esc(title(label))); qp.append(lab); this.qpLabels.push(lab);
       const row = el("div", "qp-row"); qp.append(row);
       return list.slice(0, 5).map(x => {
         const name = x.rec ? x.title : x.type === "Episode" && x.seriesName ? x.seriesName : x.title;
@@ -978,6 +1019,21 @@ class Home extends Page {
     if (this.sec === 1 && this.rows[this.qr]) this.rows[this.qr][this.qc].classList.add("focus");
     this.root.classList.toggle("qp", this.sec === 1);
     this.scrollMenu();
+    this.scrollQuickplay();
+  }
+  // More shelves than fit (continue, new recordings, new music, new movies…)? The shelves glide up / down
+  // so the picked one, with its caption under the covers, stays on screen. Two shelves never move.
+  scrollQuickplay() {
+    const lab = this.sec === 1 && this.qpLabels && this.qpLabels[this.qr];
+    if (!lab) return;
+    const top = lab.offsetTop, bottom = top + lab.offsetHeight + 12 + 170 + 90; // label, covers, caption
+    const view = 1080 - 40 - 30, total = this.qp.offsetHeight;
+    let sc = this.qpScroll || 0;
+    if (bottom > sc + view) sc = bottom - view;
+    if (top - 16 < sc) sc = top - 16;
+    sc = clamp(sc, 0, Math.max(0, total - view));
+    this.qpScroll = sc;
+    this.qp.style.translate = `0 ${-sc}px`;
   }
   // Too many items for the screen? The menu glides up / down so the picked word stays in view, with
   // the next one peeking below it (Zune HD style, no scroll bar). Short menus never move.
@@ -1010,6 +1066,7 @@ class Home extends Page {
     // Back / Esc on the main menu: go full screen to whatever is playing (live tv first, then music)
     if (k === "back") {
       if (this.sec === 1) { this.setSec(0); return true; } // from quickplay, back to the menu first
+      if (BgVod.active) { go(BgVod.page); return true; } // a movie playing behind the menus
       if (Live.active) { go(new LivePage(Live.guide, Live.i)); return true; }
       if (Player.track) { go(new NowPlaying()); return true; }
       return false;
@@ -2084,6 +2141,7 @@ class VideoPage extends Page {
 const HALF = 30 * 60e3, HOUR = 60 * 60e3;
 const G = { rowH: 92, rows: 6, hourPx: 468, span: 3 * HOUR, ahead: 12 * HOUR }; // sizes must match the .gd-* styles
 const gx = ms => ms / HOUR * G.hourPx;
+const progTitle = p => p.title + (p.isMovie && p.year ? ` (${p.year})` : ""); // "Spaceballs (1987)"
 const clock12 = t => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
 
 // made-up guide used when not signed in to Emby, so the guide can be tried anywhere
@@ -2103,7 +2161,7 @@ const SampleGuide = (() => {
         while (t < to) {
           const d = [1, 1, 2, 2, 2, 3, 4][Math.floor(r() * 7)] * HALF, title = SHOWS[Math.floor(r() * SHOWS.length)];
           out.push({ id: id + ":" + t, channelId: id, title, ep: r() < 0.4 ? `Episode ${1 + Math.floor(r() * 20)}` : "", start: t, end: t + d,
-            overview: "A sample listing so the guide can be tried without an Emby server.", isNew: r() < 0.2, isMovie: d >= 4 * HALF });
+            overview: "A sample listing so the guide can be tried without an Emby server.", isNew: r() < 0.2, isMovie: d >= 4 * HALF, year: 1950 + Math.floor(r() * 74) });
           t += d;
         }
       }
@@ -2112,11 +2170,20 @@ const SampleGuide = (() => {
   };
 })();
 
-class GuidePage extends Page {
+class GuidePage extends PivotPage {
   get titleKey() { return "tv guide"; }
   constructor() {
-    super();
-    this.heroName = "tv guide";
+    // tabs: guide (the channel grid) · movies · shows · sports. The last three list what's coming up, with
+    // the side menu (← at the left edge) for layout, size and sort, and Enter for watch / record.
+    super({ title: "tv guide", heroName: "tv guide", sections: [] });
+    const open = p => this.openProgram(p);
+    this.sections = [
+      { name: "guide", data: [true], view: () => this.gridView() },
+      { name: "movies", load: () => this.upcoming("movie"), views: { key: "tvmovies", kind: "tvmovie", sort: true }, open, empty: "no movies in the guide for the next two weeks" },
+      { name: "shows", load: () => this.upcoming("series"), views: { key: "tvshows", kind: "tvshow", sort: true }, open, empty: "no shows in the guide this week" },
+      { name: "sports", load: () => this.upcoming("sports"), views: { key: "tvsports", kind: "tvsport", sort: true }, open, empty: "no sports in the guide this week" },
+    ];
+    this.zone = "list"; // the guide opens on the channel grid, ready to move around (↑ from the top channel: the tabs)
     this.ci = 0; this.top = 0; this.channels = undefined; this.progs = new Map(); this.pending = new Set();
     const now = Date.now();
     this.T0 = Math.floor(now / HALF) * HALF;   // the guide starts at the current half hour…
@@ -2128,9 +2195,18 @@ class GuidePage extends Page {
   }
   get live() { return Emby.connected; }
   render() {
-    const r = el("div", "guide-page");
-    r.append(el("div", "sec-title z", "tv guide"));
-    this.info = el("div", "gd-info zs"); r.append(this.info);
+    if (this.dvrLists !== DVR.changed) { // something was recorded or cancelled: the movies / shows / sports lists reload (red marks)
+      this.dvrLists = DVR.changed;
+      this.sections.slice(1).forEach(x => { x.data = undefined; x.loading = null; });
+    }
+    const r = super.render();
+    r.classList.add("guide-page");
+    return r;
+  }
+  // the channel grid (the "guide" tab): title and time of the picked show above it, then the channels and times
+  gridView() {
+    const r = el("div", "list gd-wrap"); r.style.height = "780px";
+    this.info = el("div", "gd-info zs"); r.append(this.info); // (zs: it leaves and arrives with the header, like before)
     const head = el("div", "gd-head zs"); this.timeX = el("div", "gd-x"); head.append(this.timeX); r.append(head);
     const chans = el("div", "gd-chans"); this.chY = el("div", "gd-y"); chans.append(this.chY);
     const grid = el("div", "gd-grid"); this.gridX = el("div", "gd-x"); this.gridY = el("div", "gd-y");
@@ -2138,10 +2214,40 @@ class GuidePage extends Page {
     this.gridX.append(this.gridY, this.nowLine); grid.append(this.gridX);
     this.msg = el("div", "gd-msg t");
     r.append(chans, grid, this.msg);
+    if (this.channels === undefined) this.msg.textContent = "loading the guide…";
+    else if (this.channels && !this.live) { this.msg.textContent = "sample guide — sign in to emby in settings to see your channels"; this.msg.classList.add("note"); }
     this.renderTimes();
     if (this.channels) this.renderRows();
     this.layout(false);
-    return r;
+    const page = this;
+    return {
+      el: r, message: false,
+      get index() { return page.ci; },
+      get atTop() { return page.ci === 0; },
+      get item() { const ch = page.channels && page.channels[page.ci]; return ch ? page.progAt(ch, page.ft) : null; }, // (voice: what's highlighted)
+      move() {}, moveX() { return true; },
+    };
+  }
+  // tv guide → movies / shows / sports: everything airing soon on your channels, one entry per movie, show or game
+  async upcoming(kind) {
+    if (!this.live) throw new Error("sign in to emby in settings to see what's coming up");
+    this.allChans = this.allChans || Emby.channels();
+    const [list, chans] = await Promise.all([Emby.upcoming(kind, kind === "movie" ? 14 : 7), this.allChans]);
+    const byId = new Map(chans.map(c => [c.id, c])), hidden = new Set(Prefs.get("chHidden") || []), now = Date.now();
+    const seen = new Map();
+    for (const p of list.sort((a, b) => a.start - b.start)) {
+      if (hidden.has(p.channelId) || p.end <= now || /^paid program/i.test(p.title)) continue;
+      p.ch = byId.get(p.channelId) || { id: p.channelId, name: "", number: "", img: null };
+      const key = kind === "movie" ? p.title + "|" + p.year : kind === "sports" ? p.title + "|" + p.ep : p.title;
+      const had = seen.get(key);
+      if (!had) { p.airings = 1; seen.set(key, p); }
+      else { had.airings++; if (p.timerId) had.anyRec = true; }
+    }
+    return [...seen.values()];
+  }
+  openProgram(p) {
+    const ch = (this.channels || []).find(c => c.id === p.channelId) || p.ch;
+    go(new ProgramPage(this, ch, p));
   }
   mounted() {
     if (this.channels && this.dvrSeen !== DVR.changed) { // recordings changed while you were away: refresh the marks
@@ -2150,7 +2256,6 @@ class GuidePage extends Page {
     }
     this.dvrSeen = DVR.changed;
     if (this.channels === undefined) {
-      this.msg.textContent = "loading the guide…";
       Promise.resolve().then(() => this.live ? Emby.channels() : SampleGuide.channels())
         .then(c => { this.channels = arrangeChannels(c); }, e => { this.channels = null; this.err = e.message; })
         .then(() => {
@@ -2244,9 +2349,8 @@ class GuidePage extends Page {
     const now = Date.now();
     const flags = p ? [p.isNew ? "new" : "", p.isLive ? "live" : "", p.isMovie ? "movie" : "", p.start <= now && p.end > now ? "on now" : ""].filter(Boolean) : [];
     this.info.innerHTML = p
-      ? `<div class="it">${esc(p.title)}${p.ep ? `<span> · ${esc(p.ep)}</span>` : ""}</div>
-         <div class="sc">${esc(guideCh(ch))} · ${clock12(p.start)} – ${clock12(p.end)}${flags.length ? " · " + flags.join(" · ") : ""}</div>
-         <div class="io">${esc(p.overview)}</div>`
+      ? `<div class="it">${esc(p.title)}${p.isMovie && p.year ? `<span> (${p.year})</span>` : ""}${p.ep ? `<span> · ${esc(p.ep)}</span>` : ""}</div>
+         <div class="sc">${esc(guideCh(ch))} · ${clock12(p.start)} – ${clock12(p.end)}${flags.length ? " · " + flags.join(" · ") : ""}</div>`
       : `<div class="it">${esc(ch.name)}</div><div class="sc">${guideNums() && ch.number ? esc(ch.number) + " · " : ""}no guide information</div>`;
   }
   layout(anim) {
@@ -2257,6 +2361,13 @@ class GuidePage extends Page {
     this.timeX.style.transform = this.gridX.style.transform = x;
     this.chY.style.transform = this.gridY.style.transform = y;
   }
+  key(k) {
+    if (this.pv === 0 && this.zone === "list") {
+      if (k === "up" && (!this.channels || !this.channels.length || this.ci === 0)) { this.zone = "head"; this.paintZone(); return true; }
+      return this.gridKey(k);
+    }
+    return super.key(k);
+  }
   // slide the 3-hour window so time t is comfortably in view
   showTime(t) {
     const max = this.T0 + G.ahead - G.span;
@@ -2264,7 +2375,7 @@ class GuidePage extends Page {
     else if (t >= this.t0 + G.span - HALF) this.t0 = Math.floor(t / HALF) * HALF - HALF;
     this.t0 = clamp(this.t0, this.T0, max);
   }
-  key(k) {
+  gridKey(k) {
     if (!this.channels || !this.channels.length) return false;
     const ch = this.channels[this.ci], ps = this.progs.get(ch.id) || [], cur = this.progAt(ch, this.ft);
     if (k === "left" || k === "right") {
@@ -2308,7 +2419,7 @@ class ProgramPage extends Page {
       : p.start > now ? `starts in ${fmtLong((p.start - now) / 1000)}` : "already aired";
     const r = el("div", "program-page");
     r.append(el("div", "sec-title z", "tv guide"),
-      el("div", "alb-head zs", `<div class="an">${esc(p ? p.title : ch.name)}</div><div class="sc">${
+      el("div", "alb-head zs", `<div class="an">${esc(p ? progTitle(p) : ch.name)}</div><div class="sc">${
         [esc(guideCh(ch)), p ? `${clock12(p.start)} – ${clock12(p.end)}` : "", when, watching ? "watching" : ""].filter(Boolean).join(" · ")}</div>`));
     // Emby's guide pictures are usually portrait posters; the frame takes the picture's own shape
     // (portrait unless Emby says it's wide), and corrects itself once the picture has loaded
@@ -2360,7 +2471,9 @@ class ProgramPage extends Page {
         return true;
       }
       if (!Emby.connected) { toast("sign in to emby in settings to watch live tv"); return true; }
-      go(new LivePage(this.guide, this.guide.channels.indexOf(this.ch)), { replace: true }); // Back from the TV returns to the guide
+      let g = this.guide, i = (g.channels || []).indexOf(this.ch);
+      if (i < 0) { const held = new GuidePage(); held.channels = channelsWith(g.channels || [], this.ch); g = held; i = g.channels.indexOf(this.ch); } // (a hidden channel)
+      go(new LivePage(g, i), { replace: true }); // Back from the TV returns to the guide
       return true;
     }
     return false;
@@ -2720,6 +2833,7 @@ const Live = {
   },
   setStatus(t) { this.statusText = t; this.updateChip(); emitLive("status"); },
   async tune(guide, i) {
+    BgVod.stop(); // live tv takes over from a movie playing behind the menus
     this.guide = guide; this.i = i;
     const gen = ++this.gen, ch = this.ch;
     if (ch) Prefs.set("lastChId", ch.id); // for settings → channels → start on last channel
@@ -3240,6 +3354,9 @@ class LivePage extends Page {
         <div class="lv-ctl"><div class="lv-hl"></div></div>
       </div>`;
     this.btnEls = this.buttons().map(([id, label, icon]) => {
+      // the skip buttons say how far they jump (settings → playback → skip back / skip ahead)
+      if (id === "rw") label = `back ${-skipBy(-1)}s`;
+      if (id === "ff") label = `fwd ${skipBy(1)}s`;
       const b = el("div", "rb", `<span class="ring">${icon}</span><span class="lbl">${esc(label)}</span>`);
       b.dataset.id = id;
       r.querySelector(".lv-ctl").append(b);
@@ -3306,7 +3423,7 @@ class LivePage extends Page {
     if (!this.el) return;
     const ch = this.ch, p = this.current(), now = Date.now(), lag = this.behind();
     this.q(".lv-ch").textContent = `${ch.number}  ${ch.name}`;
-    this.q(".lv-title").textContent = p ? p.title : ch.name;
+    this.q(".lv-title").textContent = p ? progTitle(p) : ch.name;
     const where = lag ? `${fmt(lag)} behind live` : "live";
     this.q(".lv-sub").innerHTML = [p && p.timerId ? `<b class="recdot">● rec</b>` : "", ...[p && p.ep, where, Live.video.paused && Live.active ? "paused" : ""].filter(Boolean).map(esc)].filter(Boolean).join(" · ");
     const rec = this.btnEls.find(b => b.dataset.id === "rec");
@@ -3480,15 +3597,16 @@ class LivePage extends Page {
     }
     this.fill();
   }
-  // skip back / ahead 30 seconds within what the server has buffered; past "now" snaps back to live
+  // skip back / ahead within what the server has buffered (settings → playback → skip back / skip ahead);
+  // past "now" snaps back to live
   skip(dir) {
     const v = Live.video, r = v.seekable;
     if (!r || !r.length || r.end(r.length - 1) - r.start(0) < 5) { toast("can't skip on this channel"); return; }
-    const start = r.start(0), end = r.end(r.length - 1);
-    let t = v.currentTime + dir * 30;
+    const start = r.start(0), end = r.end(r.length - 1), by = skipBy(dir);
+    let t = v.currentTime + by;
     if (t >= end - 4) { t = end - 1; this.glyph("live"); }
     else if (t < start) { t = start; this.glyph("start"); }
-    else this.glyph(dir < 0 ? "−30" : "+30");
+    else this.glyph(by < 0 ? `−${-by}` : `+${by}`);
     v.currentTime = t;
     this.peek();
   }
@@ -3548,17 +3666,30 @@ class VodPage extends LivePage {
   render() {
     const r = super.render();
     r.classList.add("vod-page");
-    this.video = NATIVE ? nativeVideo("vod-video", true) : el("video", "vod-video"); this.video.playsInline = true;
+    // back from the menus: this movie kept playing behind them (BgVod), so its own video comes back
+    const kept = BgVod.give(this);
+    this.resumed = !!kept;
+    this.video = kept || (NATIVE ? nativeVideo("vod-video", true) : el("video", "vod-video")); this.video.playsInline = true;
     r.prepend(this.video);
     return r;
   }
   async mounted() {
+    if (this.resumed) { // already playing: just full screen again
+      Live.stop();
+      if (Player.playing) Player.toggle();
+      Volume.apply();
+      this.status(""); this.banner();
+      if (this.video.paused) this.pauseGlyph(true);
+      return;
+    }
+    BgVod.stop(); // another movie or show was playing behind the menus
     Live.stop();
     if (Player.playing) Player.toggle(); // music pauses while a movie plays
     const v = this.video;
     Volume.apply();
-    v.addEventListener("playing", () => { this.status(""); if (this.mode !== "hidden") this.fill(); });
+    v.addEventListener("playing", () => { this.status(""); if (this.el && this.mode !== "hidden") this.fill(); if (!this.el) BgVod.place(); });
     v.addEventListener("waiting", () => { if (!this.fixing) this.status("buffering…"); });
+    v.addEventListener("pause", () => { if (!this.el) BgVod.place(); });
     v.addEventListener("ended", () => { // ended long before the movie's real length = the stream broke, not the end
       const real = (this.info && this.info.dur) || this.v.runtime || 0;
       if (real > 120 && v.currentTime < real - 60) this.trouble(); else this.finished();
@@ -3618,15 +3749,25 @@ class VodPage extends LivePage {
   }
   unmount() {
     if (this.nextUp) { clearInterval(this.nextUp.timer); this.nextUp = null; }
+    if (this.keepOnLeave) { // Back while it plays: it carries on behind the menus (BgVod), Emby still told where you are
+      this.keepOnLeave = false;
+      BgVod.take(this);
+    } else this.stopPlayback();
+    super.unmount();
+  }
+  // the end of this movie's playback: Emby is told where you stopped, and the stream is closed
+  stopPlayback() {
     this.startGen++; // a start still on its way is dropped
     clearInterval(this.reportTimer);
     const v = this.video;
     if (this.info && !this.done) Emby.report("stop", this.info, v.currentTime, true);
     if (this.hls) { this.hls.destroy(); this.hls = null; }
     v.pause(); v.removeAttribute("src"); v.load();
-    super.unmount();
   }
-  leave() { return done(this.el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 250, fill: "forwards" })); }
+  leave() {
+    if (this.keepOnLeave) return Promise.resolve(); // (the picture stays up, it only moves behind the menus)
+    return done(this.el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 250, fill: "forwards" }));
+  }
   live() {}
   get dur() { const d = this.video.duration; return isFinite(d) && d > 0 ? d : (this.info && this.info.dur) || this.v.runtime || 0; }
   fill() {
@@ -3681,6 +3822,7 @@ class VodPage extends LivePage {
     this.done = true;
     clearInterval(this.reportTimer);
     if (this.info) Emby.report("stop", this.info, this.dur, false); // the end: Emby marks it watched
+    if (BgVod.page === this) { BgVod.stop(); return; } // it ended behind the menus
     if (top() !== this) return;
     // settings → playback → next episode plays: count down, then the next episode takes this screen's place
     const secs = Number(Prefs.get("nextEp")) || 0, v = this.v;
@@ -3721,7 +3863,9 @@ class VodPage extends LivePage {
     if (k === "back") {
       if (this.infoOpen()) { this.q(".lv-osd").classList.remove("info"); this.arm("osdHide"); return true; }
       if (this.mode === "controls") { this.setMode("hidden"); return true; }
-      return false; // leave: the movie stops and Emby keeps your place
+      // leave: the movie keeps playing behind the menus, like live tv (Back on the home menu brings it back)
+      this.keepOnLeave = !NATIVE && !!this.info && !this.done;
+      return false;
     }
     if (this.mode === "controls") {
       if (k === "left" || k === "right") this.focusBtn(k === "left" ? -1 : 1);
@@ -3734,6 +3878,54 @@ class VodPage extends LivePage {
     return true;
   }
 }
+
+/* ============ a movie or show playing behind the menus ============
+   Back from a movie or episode (with nothing on screen) doesn't stop it: like live tv it carries on behind
+   the menus (settings → appearance → tv behind menus: full screen and dimmed, or the small corner window).
+   Back on the home menu, or "show the player" by voice, brings it full screen again. Starting live tv, music,
+   radio, youtube or another video stops it, and Emby is told where you stopped. */
+const BgVod = {
+  page: null, // the movie's screen (closed) whose video is still playing
+  get active() { return !!this.page; },
+  init() {
+    this.layer = el("div", "vlayer vodlayer off");
+    this.layer.append(el("div", "vl-scrim"));
+    $stage.insertBefore(this.layer, $pages);
+  },
+  take(page) { this.page = page; this.layer.prepend(page.video); },
+  give(page) { // the movie's screen is opening again: its video goes back to it
+    if (this.page !== page) return null;
+    this.page = null;
+    this.place();
+    return page.video;
+  },
+  place(p = top()) {
+    if (!this.layer) return;
+    const mode = this.page && this.page !== p ? Live.bgMode : "off";
+    this.layer.classList.remove("off", "behind", "corner");
+    this.layer.classList.add(mode);
+    const chip = Live.chip;
+    if (mode !== "off") {
+      chip.innerHTML = `<b>${this.page.video.paused ? "paused" : "playing"}</b> ${esc(videoTitle(this.page.v))}`;
+      chip.classList.add("on");
+    } else if (!Live.active) chip.classList.remove("on");
+  },
+  togglePause() {
+    const pg = this.page; if (!pg) return false;
+    const v = pg.video;
+    if (v.paused) v.play().catch(() => {}); else v.pause();
+    if (pg.info) Emby.report("progress", pg.info, v.currentTime, v.paused);
+    this.place();
+    return true;
+  },
+  stop() {
+    const pg = this.page; if (!pg) return;
+    this.page = null;
+    pg.stopPlayback();
+    pg.video.remove();
+    this.place();
+  },
+};
 
 /* ============ watching a youtube video ============
    YouTube's own embedded player, full screen, with its controls hidden and the app's Zune-style ones
@@ -3775,7 +3967,7 @@ class YtPage extends LivePage {
     return r;
   }
   async mounted() {
-    Live.stop();
+    Live.stop(); BgVod.stop();
     if (Player.playing) Player.toggle(); // music pauses while a video plays
     this.status("starting…");
     let api;
@@ -4578,7 +4770,6 @@ class NowPlaying extends Page {
     const r = el("div", "np art-" + Prefs.get("npArt"));
     r.innerHTML = `
       <div class="np-bg"></div><div class="np-shade"></div>
-      <div class="np-back t">${ICON.back}</div>
       <div class="np-head"><div class="np-artist t"></div><div class="np-album t"></div></div>
       <img class="np-art flip" alt="">
       <div class="np-lyr"><div class="np-lyr-in"></div></div>
@@ -4741,9 +4932,9 @@ addEventListener("keydown", e => {
 });
 function handle(k, repeat) {
   if (k === "play" && top().playKey && top().playKey()) return; // e.g. pause live tv instead of music
-  if (k === "play") return Live.active ? Live.togglePause() : Player.toggle();
+  if (k === "play") return Live.active ? Live.togglePause() : BgVod.active ? BgVod.togglePause() : Player.toggle();
   if ((k === "next" || k === "prev" || k === "stop") && top().mediaKey && top().mediaKey(k)) return; // e.g. live tv: change channel / stop
-  if (k === "stop") return Live.active ? Live.stop() : Player.stop();
+  if (k === "stop") return Live.active ? Live.stop() : BgVod.active ? BgVod.stop() : Player.stop();
   if (k === "next") return Player.next();
   if (k === "prev") return Player.prev();
   if (top().key(k, repeat)) return;
@@ -4826,6 +5017,7 @@ async function openSection(id) {
 async function showPlayer() {
   await settled();
   const p = top();
+  if (BgVod.active) { go(BgVod.page); return true; }
   if (Live.active) { if (!(p instanceof LivePage)) go(new LivePage(Live.guide, Live.i)); return true; }
   if (Player.track) { if (!(p instanceof NowPlaying)) go(new NowPlaying()); return true; }
   return false;
@@ -4960,8 +5152,42 @@ async function runAction(action) {
   throw new Error(`unknown action ${action}`);
 }
 
+// (everyday phrasing in the voice assistant) what's on screen and playing, so "how much is left?" or
+// "what's this about?" can be answered: the screen, the highlighted item, and what's playing with times
+function screenContext() {
+  const p = top(), out = { screen: (p && p.titleKey) || (p instanceof Home ? "home menu" : ""), volume: Volume.level, muted: Volume.muted };
+  try {
+    const it = p && p.list && p.list.item;
+    const pick = it || (p instanceof VideoPage ? p.v : null);
+    if (pick) out.highlighted = { title: pick.title || pick.name || "", type: pick.type || "", year: pick.year || "", overview: String(pick.overview || "").slice(0, 300) };
+  } catch {}
+  const clockAt = s => new Date(Date.now() + s * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
+  const vp = p instanceof VodPage || p instanceof YtPage ? p : BgVod.page;
+  if (vp) {
+    const p = vp, v = p.v, pos = (p instanceof VodPage ? p.video.currentTime : p.pos) || 0, d = p.dur || 0;
+    out.nowPlaying = { kind: p instanceof YtPage ? "youtube" : v.type === "Episode" ? "tv episode" : "movie", title: v.title, series: v.seriesName || "",
+      season: v.season || "", episode: v.episode || "", overview: String(v.overview || "").slice(0, 400),
+      minutesLeft: d ? Math.round((d - pos) / 60) : null, endsAt: d ? clockAt(d - pos) : null, captions: CC.on };
+  } else {
+    const n = nowPlayingItem();
+    if (n.mediaActive) {
+      out.nowPlaying = n;
+      if (Live.active && Live.ch && Live.guide && Live.guide.progs.has(Live.ch.id)) {
+        const pr = Live.guide.progAt(Live.ch, Date.now());
+        if (pr && pr.end > Date.now()) Object.assign(out.nowPlaying, { minutesLeft: Math.round((pr.end - Date.now()) / 60e3), endsAt: clock12(pr.end), captions: CC.on });
+      }
+    }
+  }
+  if (Sleep.mins) out.sleepTimerMinutesLeft = Math.max(1, Math.round((Sleep.at - Date.now()) / 60e3));
+  return out;
+}
+
 const RPC = {
   "JSONRPC.Ping": () => "pong",
+  // everyday phrasing: what it heard shows at the bottom of the screen; the sleep timer by voice; what's on screen
+  "GUI.ShowNotification": p => { toast(String(p.message || p.title || "").slice(0, 160)); return { shown: true }; },
+  "App.SleepTimer": p => { Sleep.set(clamp(Math.round(Number(p.minutes) || 0), 0, 240)); return { minutes: Sleep.mins }; },
+  "App.GetContext": () => screenContext(),
   "GUI.ActivateWindow": async p => {
     const name = p.window || p.windowname || p.section || p.view || "";
     const w = WINDOWS[norm(name)];
@@ -4978,6 +5204,7 @@ const RPC = {
   "Player.PlayPause": async () => { await settled(); handle("play", false); return { playing: Live.active ? !Live.video.paused : Player.playing }; },
   "Player.Stop": async () => {
     Live.stop();   // the tv screen and the now playing screen close themselves when playback stops
+    BgVod.stop();
     Player.stop();
     if (top() instanceof VodPage) { await settled(); back(); } // a movie: leaving it stops it
     return { stopped: true };
@@ -5194,6 +5421,12 @@ const Remote = {
       else if (cmd === "Rewind" || cmd === "PreviousTrack") p.seek(skipBy(-1));
       return;
     }
+    if (BgVod.active) {
+      const paused = BgVod.page.video.paused;
+      if (cmd === "Pause" && !paused || cmd === "Unpause" && paused || cmd === "PlayPause") BgVod.togglePause();
+      else if (cmd === "Stop") BgVod.stop();
+      return;
+    }
     if (Live.active) {
       const paused = Live.video.paused;
       if (cmd === "Pause" && !paused || cmd === "Unpause" && paused || cmd === "PlayPause") handle("play");
@@ -5373,6 +5606,7 @@ addEventListener("mousedown", pointerIdle);
 pointerIdle();
 
 Live.init();
+BgVod.init();
 Saver.init();
 loadQuickplay();
 go(new Home());
