@@ -16,3 +16,11 @@ Assistant/
 # Private sign-in details (Emby address, username, password). Never upload them.
 .env
 .env.*
+
+# Kept only on this PC: dated backup zips (assistant.zip has private keys), the old
+# install notes, the shelved Android/Shield app, and Claude's local settings.
+*.zip
+README.txt
+android/
+Shield Install/
+.claude/
