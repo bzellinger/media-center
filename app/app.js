@@ -96,7 +96,7 @@ Theme.apply();
 
 /* ============ playback preferences (settings → playback) ============ */
 const Prefs = {
-  DEFAULTS: { npHide: 5, npArt: "hide", liveHide: 5, osdHide: 5, guideOk: "info", musicVol: 100, saver: 60, pip: "four", cc: false, ytcc: false, ytOpen: "native", fps: "on", guideNums: "on",
+  DEFAULTS: { npHide: 5, npArt: "hide", liveHide: 5, osdHide: 5, guideOk: "info", musicVol: 100, saver: 60, pip: "four", cc: false, ytcc: false, ytOpen: "native", fps: "on", npAnim: "zoom", guideNums: "on",
     chHidden: [], chFav: [], guideSpan: 3, lastCh: true, startup: "home", clock: "12", textSize: "normal", nextEp: 10, skipBack: 10, skipFwd: 30 },
   load() { try { return { ...this.DEFAULTS, ...(JSON.parse(localStorage.getItem("mc.prefs")) || {}) }; } catch { return { ...this.DEFAULTS }; } },
   get(k) { return this.load()[k]; },
@@ -414,13 +414,105 @@ function holdTitle(page, fromPan) {
   if (target && target !== fromPan) t.style.translate = target;
 }
 
+/* ============ the Zune HD AV Dock's "start playing" move (settings → appearance → now playing animation) ============
+   Opening now playing: the current screen folds away on a hinge
+   down the left edge of the TV, piece by piece from the top; a beat of empty screen; then now playing
+   swings in on the same hinge, each piece a thin sliver at the far left opening out to its place.
+   Back from now playing does the same the other way. */
+const DOCK_FOLD = "cubic-bezier(.45,.05,.75,.45)";  // speeding up as it folds away
+const DOCK_SWING = "cubic-bezier(.3,.45,.2,1)";     // a thin sliver for ~70 ms, mostly open by ~200 ms, settled ~450 ms
+// Every piece turns about the same line (the TV's left edge) and is seen from the middle of the TV,
+// wherever it sits in the page: the 3D is worked out from the middle of the screen.
+function dockFrames(e, from, to) {
+  const sr = $stage.getBoundingClientRect(), k = sr.width / 1920 || 1, r = e.getBoundingClientRect();
+  const x = (r.left - sr.left) / k, y = (r.top - sr.top) / k;
+  e.style.transformOrigin = `${960 - x}px ${540 - y}px`;
+  const at = a => `perspective(1500px) translateX(-960px) rotateY(${a}deg) translateX(960px)`;
+  return [from, to].map(f => ({ ...f, transform: at(f.a) })).map(({ a, ...f }) => f);
+}
+// the pieces of a screen, top to bottom (the giant title first), only what's on screen
+function dockPieces(page) {
+  const els = [...qa(page.el, ".z"), ...qa(page.el, ".zs"), ...qa(page.el, ".flip"), ...visibleT(page.el)];
+  const seen = new Set(), list = els.filter(e => !seen.has(e) && seen.add(e) && e.getBoundingClientRect().width > 0);
+  // a piece inside another piece moves with it
+  const top = list.filter(e => !list.some(o => o !== e && o.contains(e)));
+  return top.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+}
+// lists clip what sticks out of them (for scrolling): while pieces swing, let them out at the sides
+function dockUnclip(els) {
+  const lists = new Set(els.map(e => e.closest(".list")).filter(Boolean));
+  lists.forEach(l => { l.style.overflow = "visible"; l.style.clipPath = "inset(0 -4000px)"; });
+  return () => lists.forEach(l => { l.style.overflow = l.style.clipPath = ""; });
+}
+function dockOut(els, { dur = 300, stagger = 28 } = {}) {
+  dockUnclip(els); // (the screen is leaving, nothing to put back)
+  stagger = Math.min(stagger, 160 / Math.max(1, els.length)); // however many pieces, all on their way within ~0.16 s
+  return Promise.all(els.map((e, i) => {
+    cancelTurn(e);
+    return done(e.animate(dockFrames(e, { a: 0, opacity: 1 }, { a: 72, opacity: 0 }), { id: "turn", duration: dur, delay: i * stagger, easing: DOCK_FOLD, fill: "forwards" }));
+  }));
+}
+function dockIn(els, { dur = 460, delays } = {}) {
+  const reclip = dockUnclip(els);
+  // the picked button is normally a little bigger; during the swing that would grow from the TV's
+  // left edge (riding low), so it swings in at normal size and grows from its own middle once landed
+  els.forEach(e => { e.style.scale = "1"; });
+  return Promise.all(els.map((e, i) => {
+    cancelTurn(e);
+    const f = dockFrames(e, { a: 84, opacity: 0 }, { a: 0, opacity: 1 });
+    f.splice(1, 0, { opacity: 1, offset: 0.3 });
+    return done(e.animate(f, { id: "turn", duration: dur, delay: delays ? delays[i] ?? i * 25 : Math.min(i * 26, 320), easing: DOCK_SWING, fill: "backwards" }));
+  })).then(() => {
+    reclip();
+    // put each piece's pivot back to its own middle, so later effects (the picked button growing a
+    // little, the press dip) work from the center again instead of from the TV's left edge
+    els.forEach(e => { e.style.transformOrigin = ""; });
+    void document.body.offsetWidth; // (the new pivot first, then the size change, so it grows from the center)
+    els.forEach(e => { e.style.scale = ""; });
+  });
+}
+// now playing's pieces in the dock's order: artist, album, cover, time, bar, song, next song, buttons
+function npPieces(page) {
+  const q = s => qa(page.el, s);
+  return [...q(".np-artist"), ...q(".np-album"), ...q(".np-art"), ...q(".np-times"), ...q(".np-bar"), ...q(".np-title"), ...q(".np-next"), ...q(".np-ctl .b")]
+    .filter(e => e.getBoundingClientRect().width > 0 || e.classList.contains("np-art"));
+}
+async function dockForward(cur, page) {
+  await Promise.race([dockOut(dockPieces(cur)), wait(700)]);
+  cur.unmount();
+  stack.push(page); page.mount(); applyBg(page);
+  page.el.style.visibility = "hidden";
+  await wait(40); // a beat of empty screen
+  page.el.style.visibility = "";
+  const els = npPieces(page);
+  qa(page.el, ".np-ctl").forEach(c => c.classList.remove("t"));
+  const bgEls = qa(page.el, ".np-bg, .np-shade");
+  bgEls.forEach(b => b.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 700, easing: "ease-out", fill: "backwards" }));
+  await Promise.race([dockIn(els, { delays: [0, 30, 60, 110, 120, 130, 140, 160, 175, 190, 205, 220] }), wait(900)]);
+}
+async function dockBack(cur, prev) {
+  await Promise.race([dockOut(npPieces(cur), { dur: 260, stagger: 22 }), wait(650)]);
+  cur.unmount();
+  prev.mount(); applyBg(prev);
+  prev.el.style.visibility = "hidden";
+  await wait(40);
+  prev.el.style.visibility = "";
+  await Promise.race([dockIn(dockPieces(prev)), wait(900)]);
+}
+
+// settings → appearance → now playing animation: "dock" swings it in like the Zune AV Dock; "zoom" is the usual
+const dockOn = () => Prefs.get("npAnim") === "dock";
+
 // replace: the new page takes the current one's place (Back then skips over it)
 async function go(page, { replace = false } = {}) {
   if (busy) return;
   busy = true;
   const cur = top();
   const hero = !replace && cur && cur.hero && cur.hero(page);
-  if (hero) {
+  if (cur && dockOn() && page instanceof NowPlaying && !(cur instanceof NowPlaying)) {
+    await dockForward(cur, page);
+    if (replace) stack.splice(stack.length - 2, 1);
+  } else if (hero) {
     await heroForward(cur, page, hero);
   } else {
     const keep = sameTitle(cur, page), pan = keep ? titlePanOf(cur) : null;
@@ -441,7 +533,8 @@ async function back() {
   busy = true;
   const cur = stack.pop(), prev = top();
   const heroName = prev.heroItem && cur.heroName && prev.items && prev.items.includes(cur.heroName) ? cur.heroName : null;
-  if (heroName) await heroBack(cur, prev, heroName);
+  if (dockOn() && cur instanceof NowPlaying) await dockBack(cur, prev);
+  else if (heroName) await heroBack(cur, prev, heroName);
   else {
     const keep = sameTitle(cur, prev), pan = keep ? titlePanOf(cur) : null;
     await Promise.race([cur.leave(-1, { skipTitle: keep }), wait(650)]); cur.unmount();
@@ -4160,6 +4253,8 @@ const SETTINGS_TABS = [
       { label: "text color", values: () => Theme.COLORS.map(c => [c[0], c[0]]), get: () => Theme.fg, set: v => { Theme.save({ fg: v }); Theme.apply(); } },
       { label: "background", values: () => Art.walls.map(w => [w, w]), get: () => Theme.bg, set: v => { Theme.save({ bg: v }); Theme.apply(); } },
       { label: "tv behind menus", values: () => [["behind", "full screen"], ["corner", "small corner window"]], get: () => Live.bgMode, set: v => { Live.bgMode = v; } },
+      // how now playing opens (and closes) when you play an album, a song or a playlist
+      { label: "now playing animation", values: () => [["zoom", "zoom (the usual)"], ["dock", "swing in (zune dock)"]], get: () => Prefs.get("npAnim"), set: v => Prefs.set("npAnim", v) },
       { label: "text size", values: () => [["normal", "normal"], ["large", "large"]], get: () => Prefs.get("textSize"), set: v => { Prefs.set("textSize", v); applyTextSize(); } },
       { label: "clock", values: () => [["12", "12-hour"], ["24", "24-hour"], ["off", "hidden"]], get: () => Prefs.get("clock"), set: v => { Prefs.set("clock", v); clock(); } },
       { label: "start on", values: () => [["home", "home menu"], ...MENU_ALL.map(id => [id, lower(MENU_LABEL[id] || id)]), ["live", "last channel watched"]], get: () => Prefs.get("startup"), set: v => Prefs.set("startup", v) },
