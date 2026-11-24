@@ -423,11 +423,17 @@ const DOCK_FOLD = "cubic-bezier(.45,.05,.75,.45)";  // speeding up as it folds a
 const DOCK_SWING = "cubic-bezier(.3,.45,.2,1)";     // a thin sliver for ~70 ms, mostly open by ~200 ms, settled ~450 ms
 // Every piece turns about the same line (the TV's left edge) and is seen from the middle of the TV,
 // wherever it sits in the page: the 3D is worked out from the middle of the screen.
+// (The piece keeps its own pivot point: the trip to the middle of the TV and back is part of the
+// movement itself. Moving the pivot instead made the picked button, which is drawn a little bigger,
+// jump the moment a swing started.)
 function dockFrames(e, from, to) {
   const sr = $stage.getBoundingClientRect(), k = sr.width / 1920 || 1, r = e.getBoundingClientRect();
-  const x = (r.left - sr.left) / k, y = (r.top - sr.top) / k;
-  e.style.transformOrigin = `${960 - x}px ${540 - y}px`;
-  const at = a => `perspective(1500px) translateX(-960px) rotateY(${a}deg) translateX(960px)`;
+  const cs = getComputedStyle(e), s = parseFloat(cs.scale) || 1;
+  const [px, py] = cs.transformOrigin.split(" ").map(parseFloat);
+  // where the piece's pivot sits on the TV (a bigger, picked button is grown around that same point)
+  const ox = (r.left - sr.left) / k + px * s, oy = (r.top - sr.top) / k + py * s;
+  const dx = 960 - ox, dy = 540 - oy;
+  const at = a => `translate(${dx}px, ${dy}px) perspective(1500px) translateX(-960px) rotateY(${a}deg) translateX(960px) translate(${-dx}px, ${-dy}px)`;
   return [from, to].map(f => ({ ...f, transform: at(f.a) })).map(({ a, ...f }) => f);
 }
 // the pieces of a screen, top to bottom (the giant title first), only what's on screen
@@ -464,11 +470,7 @@ function dockIn(els, { dur = 460, delays } = {}) {
     return done(e.animate(f, { id: "turn", duration: dur, delay: delays ? delays[i] ?? i * 25 : Math.min(i * 26, 320), easing: DOCK_SWING, fill: "backwards" }));
   })).then(() => {
     reclip();
-    // put each piece's pivot back to its own middle, so later effects (the picked button growing a
-    // little, the press dip) work from the center again instead of from the TV's left edge
-    els.forEach(e => { e.style.transformOrigin = ""; });
-    void document.body.offsetWidth; // (the new pivot first, then the size change, so it grows from the center)
-    els.forEach(e => { e.style.scale = ""; });
+    els.forEach(e => { e.style.scale = ""; }); // landed: the picked button grows to its size
   });
 }
 // now playing's pieces in the dock's order: artist, album, cover, time, bar, song, next song, buttons
