@@ -95,8 +95,11 @@ const Theme = {
 Theme.apply();
 
 /* ============ playback preferences (settings → playback) ============ */
+// what the screensaver for when nothing plays can show (settings → playback; app.js: IdleSaver)
+const IDLE_KINDS = [["movies", "movies"], ["shows", "tv shows"], ["guide", "tv guide (on now)"], ["recordings", "recordings"], ["music", "music"], ["photos", "your photos"]];
 const Prefs = {
-  DEFAULTS: { npHide: 5, npArt: "hide", liveHide: 5, osdHide: 5, guideOk: "info", musicVol: 100, saver: 60, pip: "four", cc: false, ytcc: false, ytOpen: "native", fps: "on", npAnim: "zoom", saverLook: "zune", guideNums: "on",
+  DEFAULTS: { npHide: 5, npArt: "hide", liveHide: 5, osdHide: 5, guideOk: "info", musicVol: 100, saver: 60, pip: "four", cc: false, ytcc: false, ytOpen: "native", fps: "on", npAnim: "zoom", saverLook: "zune", idleSaver: 5, idleLook: "backdrops",
+    idle_movies: true, idle_shows: true, idle_guide: true, idle_recordings: true, idle_music: true, idle_photos: false, guideNums: "on",
     chHidden: [], chFav: [], guideSpan: 3, lastCh: true, startup: "home", clock: "12", textSize: "normal", nextEp: 10, skipBack: 10, skipFwd: 30 },
   load() { try { return { ...this.DEFAULTS, ...(JSON.parse(localStorage.getItem("mc.prefs")) || {}) }; } catch { return { ...this.DEFAULTS }; } },
   get(k) { return this.load()[k]; },
@@ -4268,6 +4271,10 @@ const SETTINGS_TABS = [
       { label: "music info hides after", values: () => SECONDS([0, 3, 5, 8, 10, 15]), get: () => Prefs.get("npHide"), set: v => Prefs.set("npHide", v) },
       { label: "music screensaver", values: () => [[0, "off"], [30, "after 30 seconds"], [60, "after 1 minute"], [120, "after 2 minutes"], [300, "after 5 minutes"]], get: () => Prefs.get("saver"), set: v => { Prefs.set("saver", v); Saver.poke(); } },
       { label: "screensaver look", values: () => [["zune", "zune hd (moving letters)"], ["crawl", "scrolling text + bio"]], get: () => Prefs.get("saverLook"), set: v => Prefs.set("saverLook", v) },
+      // when nothing is playing (any key just wakes it)
+      { label: "idle screensaver", values: () => [[0, "off"], [2, "after 2 minutes"], [5, "after 5 minutes"], [10, "after 10 minutes"], [15, "after 15 minutes"]], get: () => Prefs.get("idleSaver"), set: v => { Prefs.set("idleSaver", v); Saver.poke(); } },
+      { label: "idle screensaver look", values: () => [["backdrops", "backdrops"], ["bands", "zune bands"], ["wall", "cover wall"]], get: () => Prefs.get("idleLook"), set: v => Prefs.set("idleLook", v) },
+      ...IDLE_KINDS.map(([k, name]) => ({ label: "idle screensaver: " + name, values: () => [[true, "on"], [false, "off"]], get: () => !!Prefs.get("idle_" + k), set: v => { Prefs.set("idle_" + k, v); IdleSaver.poolAt = 0; } })),
       { label: "album art when info hides", values: () => [["hide", "hide it"], ["center", "move to the middle"]], get: () => Prefs.get("npArt"), set: v => Prefs.set("npArt", v) },
       { label: "live tv info hides after", values: () => SECONDS([0, 3, 5, 8, 10]), get: () => Prefs.get("liveHide"), set: v => Prefs.set("liveHide", v) },
       { label: "player controls hide after", values: () => SECONDS([0, 3, 5, 8, 10, 15]), get: () => Prefs.get("osdHide"), set: v => Prefs.set("osdHide", v) },
@@ -5012,7 +5019,7 @@ const KEYS = {
 let pending = null;
 addEventListener("keydown", e => {
   Saver.poke();
-  if (Saver.on) { e.preventDefault(); Saver.hide(); return; } // the first press only wakes the screen
+  if (Saver.on || IdleSaver.on) { e.preventDefault(); Saver.hide(); return; } // the first press only wakes the screen
   // while typing in a text field, let keys type; only these finish editing
   const a = document.activeElement;
   if (a && a.tagName === "INPUT") {
@@ -5617,15 +5624,17 @@ const ZuneSaver = {
   },
   time() {
     const e = this.shot; if (!e) return;
-    const txt = Player.track && !Player.track.live ? fmtT(Player.pos) : "";
+    const txt = this.timeText ? this.timeText() : Player.track && !Player.track.live ? fmtT(Player.pos) : "";
     e.querySelectorAll(".zh-t").forEach(x => { x.textContent = txt; });
   },
+  // src: where the names come from (the idle screensaver hands its cards in); normally the song playing
+  src: null, timeText: null,
   async next(first) {
-    const run = ++this.run, t = Player.track;
+    const run = ++this.run, t = this.src ? this.src() : Player.track;
     clearTimeout(this.timer);
     if (!t || !this.host) return;
     if (this.shot) { await this.leave(this.shot); if (run !== this.run) return; await wait(500); if (run !== this.run) return; }
-    this.enter(Player.track || t);
+    this.enter(this.src ? t : Player.track || t);
     this.timer = setTimeout(() => this.next(), (17 + Math.random() * 6) * 1000);
   },
   enter(t) {
@@ -5673,6 +5682,170 @@ const ZuneSaver = {
     return done(a).then(() => e.remove());
   },
 };
+
+/* ============ the screensaver for when nothing is playing (settings → playback → idle screensaver) ============
+   After a few minutes with nothing playing and no key pressed, random things from the library come
+   and go: movies, tv shows, what's on tv now, new recordings, music, and (if switched on) your photos.
+   Three looks: "backdrops" (the picture drifting, the title in giant thin letters), "zune bands" (the
+   music screensaver's tilted bands, with library names), "cover wall" (a wall of covers swapping one at
+   a time, now and then one grows to show what it is). Any key or the mouse only wakes it. */
+const IdleSaver = {
+  on: false, pool: [], i: 0, poolAt: 0, timer: null,
+  eligible() {
+    const p = top();
+    if (Saver.on || Player.playing || Live.active || BgVod.page) return false;
+    if (p instanceof VodPage || p instanceof LivePage || p instanceof PhotoPage) return false;
+    if (document.activeElement && document.activeElement.tagName === "INPUT") return false;
+    return !busy;
+  },
+  kinds() { return IDLE_KINDS.map(k => k[0]).filter(k => Prefs.get("idle_" + k)); },
+  init() {
+    this.el = el("div", "saver idle");
+    this.el.innerHTML = `<div class="sv-bg"></div><div class="sv-shade"></div><div class="is-body"></div>`;
+    $stage.append(this.el);
+    setInterval(() => {
+      const mins = Number(Prefs.get("idleSaver")) || 0;
+      if (!this.on && mins > 0 && Date.now() - Saver.last >= mins * 60000 && this.eligible()) this.show();
+      if (this.on && this.look === "bands") IdleBands.time();
+    }, 1000);
+  },
+  // the cards: fresh from Emby every half hour (or the sample library when not signed in)
+  async load() {
+    if (this.pool.length && Date.now() - this.poolAt < 30 * 60000) return;
+    let cards = [];
+    if (Emby.connected) cards = await Emby.saverPool(this.kinds(), Prefs.get("chHidden") || []).catch(() => []);
+    if (!Emby.connected && this.kinds().includes("music")) { // (the sample library only has music)
+      cards = cards.concat(LIB.albums.map(a => ({ kind: "music", label: "music", title: a.title, info: [a.artist.name, a.year].filter(Boolean).join(" · "), album: a, wide: null, hue: a.hue })));
+    }
+    // mixed up, so the same kind doesn't come twice in a row too often
+    this.pool = cards.map(c => [Math.random(), c]).sort((a, b) => a[0] - b[0]).map(x => x[1]);
+    this.poolAt = Date.now(); this.i = 0;
+  },
+  card() { if (!this.pool.length) return null; const c = this.pool[this.i % this.pool.length]; this.i++; return c; },
+  // a card's pictures: the wide one for the background (else its poster, softened), the poster / cover
+  wideOf: c => c.wide || (c.album ? cover(c.album) : c.poster) || Art.photo(c.title, c.hue),
+  posterOf: c => c.album ? cover(c.album) : c.poster || c.wide || genCover({ title: c.title, hue: c.hue, id: c.title }),
+  setBg(c) {
+    const bg = this.el.querySelector(".sv-bg"), img = el("img");
+    img.alt = ""; img.src = this.wideOf(c);
+    img.classList.toggle("soft", !c.wide); // a poster stretched to the whole screen is blurred, like a backdrop
+    img.style.animationName = "svdrift" + (1 + Math.floor(Math.random() * 3));
+    img.onload = () => { img.classList.add("in"); setTimeout(() => [...bg.children].slice(0, -1).forEach(o => o.remove()), 2600); };
+    img.onerror = () => { if (!img.dataset.tried) { img.dataset.tried = 1; img.classList.add("soft"); img.src = Art.photo(c.title, c.hue); } else img.remove(); };
+    bg.append(img);
+  },
+  async show() {
+    this.on = true; this.look = Prefs.get("idleLook");
+    const body = this.el.querySelector(".is-body"); body.innerHTML = "";
+    this.el.className = "saver idle look-" + this.look;
+    this.el.classList.add("on");
+    document.documentElement.classList.add("nopointer");
+    await this.load();
+    if (!this.on || !this.pool.length) return;
+    if (this.look === "bands") {
+      const host = el("div", "sv-zune"); body.append(host);
+      IdleBands.host = host;
+      IdleBands.src = () => { const c = this.card(); if (!c) return null; this.setBg(c); return this.asTrack(c); };
+      IdleBands.start(host);
+    } else if (this.look === "wall") this.wall(body);
+    else this.backdrops(body);
+  },
+  hide() {
+    if (!this.on) return;
+    this.on = false;
+    this.el.classList.remove("on");
+    clearTimeout(this.timer); clearInterval(this.timer);
+    const run = ++this.run;
+    setTimeout(() => { if (this.on || run !== this.run) return; IdleBands.stop(); this.el.querySelector(".is-body").innerHTML = ""; this.el.querySelector(".sv-bg").innerHTML = ""; }, 1300);
+  },
+  run: 0,
+  // for the bands: a card dressed up as a song (giant letters take turns: title, then its label, then its info)
+  asTrack(c) {
+    return { title: c.title, artist: { name: c.label }, album: { title: c.info || c.label, imgs: [this.posterOf(c)], id: c.title, hue: c.hue }, live: false };
+  },
+  // ---- look 1: backdrops ----
+  backdrops(body) {
+    const show = () => {
+      const c = this.card(); if (!c || !this.on) return;
+      this.setBg(c);
+      const old = [...body.children];
+      old.forEach(o => { o.classList.add("out"); setTimeout(() => o.remove(), 900); });
+      const until = c.until ? "until " + new Date(c.until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase() : "";
+      const card = el("div", "ib-card");
+      card.innerHTML = `<div class="ib-title"></div><div class="ib-label"></div><div class="ib-info"></div><div class="ib-text"></div>`;
+      card.querySelector(".ib-title").textContent = c.title;
+      card.querySelector(".ib-label").textContent = c.label;
+      card.querySelector(".ib-info").textContent = [c.info, until].filter(Boolean).join(" · ");
+      card.querySelector(".ib-text").textContent = c.text || "";
+      body.append(card);
+      // the giant title drifts slowly sideways while it's up; the lines below slide in one after another
+      const t = card.querySelector(".ib-title"), d = Math.random() < 0.5 ? -1 : 1;
+      t.animate([{ transform: `translateX(${-d * 60}px)` }, { transform: `translateX(${d * 60}px)` }], { duration: 18000, easing: "linear", fill: "both" });
+      slideIn([t, card.querySelector(".ib-label"), card.querySelector(".ib-info"), card.querySelector(".ib-text")], 1, { dist: 160, dur: 900, stagger: 90 });
+    };
+    show();
+    this.timer = setInterval(show, 16000);
+  },
+  // ---- look 3: the cover wall ----
+  wall(body) {
+    const COLS = 8, ROWS = 4, S = 240, gapX = (1920 - COLS * S) / 2, gapY = (1080 - ROWS * S) / 2;
+    const grid = el("div", "iw-grid"); body.append(grid);
+    const tiles = [];
+    for (let r = 0; r < ROWS; r++) for (let k = 0; k < COLS; k++) {
+      const t = el("div", "iw-tile"), img = el("img"); img.alt = "";
+      Object.assign(t.style, { left: gapX + k * S + "px", top: gapY + r * S + "px" });
+      const c = this.card(); img.src = this.posterOf(c); t.card = c;
+      t.append(img); grid.append(t); tiles.push(t);
+    }
+    tiles.forEach((t, i) => t.animate([{ opacity: 0, transform: "scale(.85)" }, { opacity: 1, transform: "none" }], { duration: 700, delay: (i % COLS) * 40 + Math.floor(i / COLS) * 60, easing: EASE, fill: "backwards" }));
+    let n = 0, feature = null;
+    const flip = t => { // the tile turns edge-on, its picture changes, it turns back
+      const c = this.card(); if (!c) return;
+      const img = t.querySelector("img"), nu = new Image(); nu.src = this.posterOf(c);
+      const go = () => {
+        t.animate([{ transform: "rotateY(0deg)" }, { transform: "rotateY(90deg)" }], { duration: 260, easing: EASE_IN }).finished.then(() => {
+          img.src = nu.src; t.card = c;
+          t.animate([{ transform: "rotateY(-90deg)" }, { transform: "rotateY(0deg)" }], { duration: 420, easing: EASE });
+        }).catch(() => {});
+      };
+      nu.onload = go; nu.onerror = () => {};
+    };
+    const grow = () => { // one tile grows over its neighbours and shows what it is, then settles back
+      if (feature) return;
+      const k = Math.floor(Math.random() * (COLS - 3)), r = Math.floor(Math.random() * (ROWS - 1));
+      const t = tiles[r * COLS + k], c = t.card; if (!c) return;
+      this.setBg(c);
+      feature = el("div", "iw-feature");
+      Object.assign(feature.style, { left: t.style.left, top: t.style.top });
+      feature.innerHTML = `<img alt=""><div class="iw-info"><div class="iw-label"></div><div class="iw-title"></div><div class="iw-line"></div></div>`;
+      feature.querySelector("img").src = t.querySelector("img").src;
+      feature.querySelector(".iw-label").textContent = c.label;
+      feature.querySelector(".iw-title").textContent = c.title;
+      const until = c.until ? "until " + new Date(c.until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase() : "";
+      feature.querySelector(".iw-line").textContent = [c.info, until].filter(Boolean).join(" · ");
+      grid.append(feature);
+      grid.classList.add("dim");
+      feature.animate([{ transform: "scale(.5)", opacity: 0 }, { transform: "none", opacity: 1 }], { duration: 700, easing: EASE, fill: "backwards" });
+      slideIn([...feature.querySelectorAll(".iw-info > div")], 1, { dist: 120, dur: 700, stagger: 80 });
+      const f = feature;
+      setTimeout(() => {
+        grid.classList.remove("dim");
+        f.animate([{ transform: "none", opacity: 1 }, { transform: "scale(.5)", opacity: 0 }], { duration: 450, easing: EASE_IN, fill: "forwards" }).finished.then(() => f.remove()).catch(() => {});
+        if (feature === f) feature = null;
+      }, 7000);
+    };
+    this.timer = setInterval(() => {
+      if (!this.on) return;
+      n++;
+      if (n % 6 === 0) grow(); else flip(tiles[Math.floor(Math.random() * tiles.length)]);
+    }, 2200);
+  },
+};
+// the bands for the idle screensaver: the same moves as the music one, its own copy
+const IdleBands = Object.assign(Object.create(ZuneSaver), {
+  host: null, shot: null, timer: null, angle: null, dir: 1, run: 0, turn: -1,
+  timeText: () => new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase(),
+});
 
 /* ============ music screensaver (Zune "now playing" style) ============
    While music or radio plays and nothing has been pressed for a while (settings → playback →
@@ -5723,6 +5896,7 @@ const Saver = {
     document.documentElement.classList.add("nopointer");
   },
   hide() {
+    IdleSaver.hide(); // (the screensaver for when nothing plays goes too)
     if (!this.on) return;
     this.on = false; this.poke();
     this.el.classList.remove("on");
@@ -5802,7 +5976,7 @@ pointerIdle();
 
 Live.init();
 BgVod.init();
-Saver.init();
+Saver.init(); IdleSaver.init();
 loadQuickplay();
 go(new Home());
 // settings → appearance → start on: open a section (or the last channel) instead of the home menu

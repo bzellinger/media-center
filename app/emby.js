@@ -560,6 +560,41 @@ window.Emby = (() => {
     deleteItem: id => req(`/Items/${id}`, { method: "DELETE" }),
     mediaLibs, folder, everything,
     lyrics,
+    // the screensaver for when nothing is playing: random "cards" from the sources that are switched on
+    // (kinds: movies, shows, guide, recordings, music, photos). Each card: what it is, its title, an info
+    // line, a few words about it, a wide picture (backdrop) and / or a poster or cover.
+    saverPool: async (kinds, hiddenChannels = []) => {
+      const out = [], when = async (k, f) => { if (!kinds.includes(k)) return; try { out.push(...(await f())); } catch {} };
+      const mins = s => s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.round(s % 3600 / 60)} min` : `${Math.round(s / 60)} min`;
+      await Promise.all([
+        when("movies", async () => (await items({ IncludeItemTypes: "Movie", SortBy: "Random", Limit: 30 })).map(mapVideo)
+          .filter(v => v.backdrop || v.img).map(v => ({ kind: "movie", label: "movie", title: v.title,
+            info: [v.year, v.runtime ? mins(v.runtime) : "", v.rating].filter(Boolean).join(" · "), text: v.overview, wide: v.backdrop, poster: v.img, hue: v.hue }))),
+        when("shows", async () => (await items({ IncludeItemTypes: "Series", SortBy: "Random", Limit: 30 })).map(mapVideo)
+          .filter(v => v.backdrop || v.img).map(v => ({ kind: "show", label: "tv show", title: v.title,
+            info: [v.year, ...(v.genres || []).slice(0, 2)].filter(Boolean).join(" · ").toLowerCase(), text: v.overview, wide: v.backdrop, poster: v.img, hue: v.hue }))),
+        when("guide", async () => list(await req("/LiveTv/Programs?" + Q({
+          UserId: s.userId, IsAiring: true, Fields: PROGRAM_FIELDS, EnableImages: true, ImageTypeLimit: 1, EnableUserData: false, Limit: 120,
+        }))).filter(i => !hiddenChannels.includes(i.ChannelId)).map(i => {
+          const p = mapProgram(i);
+          return { kind: "guide", label: "on now" + (i.ChannelName ? " · " + i.ChannelName : ""), title: p.title + (p.isMovie && p.year ? ` (${p.year})` : ""),
+            info: p.ep, until: p.end, text: p.overview, wide: null, poster: p.img, hue: hashHue(p.title) };
+        })),
+        when("recordings", async () => (await api.recordings()).filter(r => !r.played && !r.recording).slice(0, 30)
+          .map(r => ({ kind: "recording", label: "recorded" + (r.channel ? " · " + r.channel : ""), title: r.title,
+            info: r.ep, text: r.overview, wide: null, poster: r.img || r.thumb, hue: r.hue }))),
+        when("music", async () => (await items({ IncludeItemTypes: "MusicAlbum", SortBy: "Random", Limit: 30 })).map(mapAlbum)
+          .map(a => ({ kind: "music", label: "music", title: a.title, info: [a.artist.name, a.year].filter(Boolean).join(" · "),
+            album: a, wide: a.artist && a.artist.id ? api.artistBackdrop(a.artist) + `&api_key=${encodeURIComponent(s.token || "")}` : null, hue: a.hue }))),
+        when("photos", async () => {
+          const libs = await mediaLibs("photos"); if (!libs.length) return [];
+          const r = await items({ IncludeItemTypes: "Photo", SortBy: "Random", Limit: 30, ParentId: libs[Math.floor(Math.random() * libs.length)].id });
+          return r.map(i => ({ kind: "photo", label: "photos", title: (i.Name || "").replace(/\.[a-z0-9]+$/i, ""),
+            info: i.ProductionYear || "", wide: img(i.Id, i.ImageTags && i.ImageTags.Primary, "Primary", 1080), poster: img(i.Id, i.ImageTags && i.ImageTags.Primary, "Primary", 480), hue: hashHue(i.Id) }));
+        }),
+      ]);
+      return out;
+    },
     // either
     resume: async () => list(await req(`/Users/${s.userId}/Items/Resume?` + Q({ Limit: 12, MediaTypes: "Video", Fields: FIELDS }))).map(mapVideo),
     artistBackdrop: a => a && a.id ? `${s.server}/emby/Items/${a.id}/Images/Backdrop?maxHeight=1080&quality=85` : null,
