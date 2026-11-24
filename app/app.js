@@ -5584,14 +5584,14 @@ const Remote = {
 };
 
 /* ============ the Zune HD's music screensaver (settings → playback → screensaver look) ============
-   Like the Zune HD on a TV: over the dim artist photo, one tilted group — the artist and album in
-   giant thin letters, the album name in small capitals along their foot, the cover, the song and its
-   time — drifts slowly along its own slant. Every 17–23 seconds it changes direction: the group speeds
+   Like the Zune HD on a TV: over the dim artist photo, a tilted group of bands — one name in giant
+   thin letters, the others in bold capitals and a thin line with the song's time — each band sliding
+   along the slant at its own speed, some the opposite way, with the cover drifting on its own. Every 17–23 seconds it changes direction: the group speeds
    off along its slant, smearing as it fades; half a second of just the photo; then a new group, at a
    new angle and moving the other way, slides in already moving and settles into the slow drift. */
 const ZuneSaver = {
   ANGLES: [-58, -72, -84, -12, -34, -66, 6, -46],
-  host: null, shot: null, timer: null, angle: null, dir: 1, run: 0,
+  host: null, shot: null, timer: null, angle: null, dir: 1, run: 0, turn: -1,
   start(host) { this.host = host; this.stop(); this.next(true); },
   stop() {
     this.run++; clearTimeout(this.timer); this.timer = null;
@@ -5600,19 +5600,26 @@ const ZuneSaver = {
   },
   // a new song: change direction now, so the new names come in
   song() { if (this.host && Saver.on) { clearTimeout(this.timer); this.next(); } },
-  build(t) {
-    const album = t.live ? t.station.title : t.album.title, artist = t.artist.name;
-    const e = el("div", "zh-shot");
-    e.innerHTML = `<img class="zh-art" alt=""><div class="zh-time"></div><div class="zh-song"></div>
-      <div class="zh-big"></div><div class="zh-mid"><b></b><span></span></div>`;
-    e.querySelector(".zh-big").textContent = [artist, album].filter(Boolean).join("  ");
-    e.querySelector(".zh-mid b").textContent = album || "";
-    e.querySelector(".zh-mid span").textContent = artist || "";
-    e.querySelector(".zh-song").textContent = t.title || "";
-    setCover(e.querySelector(".zh-art"), t.live ? t.station : t.album);
-    return e;
+  // The bands, all at the same slant, each sliding along it at its own speed (px a second); a minus
+  // runs the other way. The giant letters take turns: the song, then the artist, then the album.
+  // (Seen in the video: the album in big bold capitals and again smaller, and a thin line of the song
+  // and its time running against them, while the cover drifts on its own.)
+  bands(t) {
+    const album = (t.live ? t.station.title : t.album.title) || "", artist = t.artist.name || "", song = t.title || "";
+    const giant = [song, artist, album].filter(Boolean)[++this.turn % [song, artist, album].filter(Boolean).length] || song;
+    const others = [album, artist, song].filter(x => x && x !== giant);
+    return [
+      { cls: "zh-big", text: giant, top: -470, v: 16 },
+      { cls: "zh-b1", text: others[0] || giant, top: -540, v: -34 },
+      { cls: "zh-b2", text: others[0] || giant, top: 236, v: -52 },
+      { cls: "zh-b3", text: others[1] || others[0] || giant, top: 372, v: 40, time: true },
+    ];
   },
-  time() { const e = this.shot && this.shot.querySelector(".zh-time"); if (e) e.textContent = Player.track && !Player.track.live ? fmtT(Player.pos) : ""; },
+  time() {
+    const e = this.shot; if (!e) return;
+    const txt = Player.track && !Player.track.live ? fmtT(Player.pos) : "";
+    e.querySelectorAll(".zh-t").forEach(x => { x.textContent = txt; });
+  },
   async next(first) {
     const run = ++this.run, t = Player.track;
     clearTimeout(this.timer);
@@ -5622,32 +5629,42 @@ const ZuneSaver = {
     this.timer = setTimeout(() => this.next(), (17 + Math.random() * 6) * 1000);
   },
   enter(t) {
-    const e = this.shot = this.build(t);
-    this.host.append(e);
-    this.time();
     // a new angle each time (never the same twice), and the other direction
     const choices = this.ANGLES.filter(a => a !== this.angle);
     const a = this.angle = choices[Math.floor(Math.random() * choices.length)];
     const dir = this.dir = -this.dir;
-    // which part of the long name is on screen: anywhere from the cover end to near the last letters
-    const bigW = e.querySelector(".zh-big").offsetWidth;
-    // the small capitals run the whole length of the giant letters (album, artist, album, artist…)
-    const mid = e.querySelector(".zh-mid"), one = mid.innerHTML, oneW = mid.offsetWidth || 1;
-    mid.innerHTML = Array(Math.max(1, Math.ceil(bigW / (oneW + 80)) + 1)).fill(one).join('<i class="zh-gap"></i>');
-    const tx = -Math.random() * Math.max(0, bigW - 700) + 200;
+    const e = this.shot = el("div", "zh-shot");
+    this.host.append(e);
+    const life = 40000; // longer than a group is ever on screen
+    for (const b of this.bands(t)) {
+      const band = el("div", "zh-band " + b.cls);
+      band.style.top = b.top + "px";
+      const piece = b.time ? `<span>${esc(b.text)}</span><b class="zh-t"></b>` : `<span>${esc(b.text)}</span>`;
+      band.innerHTML = piece;
+      e.append(band);
+      // repeated so the band never runs out, whichever way and however far it slides
+      const one = band.offsetWidth || 1, n = Math.max(2, Math.ceil(7000 / one));
+      band.innerHTML = Array(n).fill(piece).join("");
+      const w = band.offsetWidth, start = -w / 2 + (Math.random() - 0.5) * one;
+      const go = b.v * dir * life / 1000;
+      band.animate([{ transform: `translateX(${start}px)` }, { transform: `translateX(${start + go}px)` }],
+        { duration: life, easing: "linear", fill: "forwards" });
+    }
+    // the cover drifts on its own, near the big bold band
+    const art = el("img", "zh-art"); art.alt = ""; setCover(art, t.live ? t.station : t.album); e.append(art);
+    const ax = (Math.random() - 0.5) * 900;
+    art.animate([{ transform: `translateX(${ax}px)` }, { transform: `translateX(${ax + 22 * dir * life / 1000}px)` }],
+      { duration: life, easing: "linear", fill: "forwards" });
+    this.time();
+    // the whole group turns to its angle and slides in, already moving, then settles
     const T = x => `rotate(${a}deg) translate(${x}px, 0px)`;
-    const drift = (17 + Math.random() * 6 + 2) * 1000, entry = 900, total = entry + drift;
-    e._move = { a, dir, tx, drift, entry, total };
-    e._anim = e.animate([
-      { transform: T(tx - dir * 520), opacity: 0, offset: 0, easing: EASE },        // slides in, already moving…
-      { transform: T(tx), opacity: 1, offset: entry / total, easing: "linear" },    // …and settles
-      { transform: T(tx + dir * 900), opacity: 1, offset: 1 },                      // into the slow drift
-    ], { duration: total, fill: "forwards" });
+    e._move = { a, dir };
+    e.animate([{ transform: T(-dir * 520), opacity: 0 }, { transform: T(0), opacity: 1 }], { duration: 900, easing: EASE, fill: "forwards" });
   },
-  // speeds off along its slant, smearing and fading
+  // speeds off along its slant, smearing and fading (the bands keep sliding as it goes)
   leave(e) {
     const cur = getComputedStyle(e).transform, m = e._move;
-    if (e._anim) e._anim.cancel();
+    e.getAnimations().forEach(x => x.cancel());
     e.style.transform = cur;
     const a = e.animate([
       { transform: cur, opacity: 1, filter: "blur(0px)" },

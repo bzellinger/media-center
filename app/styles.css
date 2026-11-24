@@ -682,17 +682,21 @@ html.native .vlayer, html.native .vlayer.multi, html.native .lv-video, html.nati
 .saver.zh .sv-crawl, .saver.zh .sv-now, .saver.zh .sv-bio { display: none; }
 .saver.zh .sv-shade { background: rgba(0,0,0,.62); }
 .saver.zh .sv-bg img { filter: grayscale(.35); }
-/* the group's own spot is the middle of the TV; it's turned and slid from there */
+/* the group's own spot is the middle of the TV; it's turned and slid from there. Each band is a long
+   line of repeated words that slides along the slant on its own (app.js: ZuneSaver.enter) */
 .zh-shot { position: absolute; left: 960px; top: 540px; width: 0; height: 0; transform-origin: 0 0; will-change: transform, opacity; }
-.zh-shot > * { position: absolute; white-space: nowrap; text-transform: uppercase; color: var(--fg); }
-.zh-big { left: 0; top: -470px; font-size: 760px; line-height: 1; font-weight: 200; letter-spacing: -.03em; }
-.zh-mid { left: 40px; top: 300px; font-size: 64px; line-height: 1; letter-spacing: .02em; }
-.zh-mid b { font-weight: 600; }
-.zh-mid span { font-size: 38px; font-weight: 600; margin-left: 28px; opacity: .8; }
-.zh-mid .zh-gap { display: inline-block; width: 80px; }
-.zh-art { left: -420px; top: -230px; width: 320px; height: 320px; object-fit: cover; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
-.zh-time { left: -420px; top: 120px; font-size: 120px; line-height: 1; font-weight: 200; }
-.zh-song { left: -420px; top: 262px; font-size: 40px; line-height: 1; font-weight: 600; opacity: .85; }
+.zh-band { position: absolute; left: 0; white-space: nowrap; text-transform: uppercase; color: var(--fg); line-height: 1; will-change: transform; }
+.zh-band > * { display: inline-block; }
+.zh-big { font-size: 760px; font-weight: 200; letter-spacing: -.03em; }
+.zh-big span { padding-right: .35em; }
+.zh-b1 { font-size: 130px; font-weight: 700; letter-spacing: .01em; }
+.zh-b1 span { padding-right: .5em; }
+.zh-b2 { font-size: 96px; font-weight: 700; letter-spacing: .01em; }
+.zh-b2 span { padding-right: .5em; }
+.zh-b3 { font-size: 46px; font-weight: 400; letter-spacing: .02em; opacity: .9; }
+.zh-b3 span { padding-right: .4em; }
+.zh-b3 .zh-t { font-weight: 700; padding-right: 1.2em; }
+.zh-art { position: absolute; left: -150px; top: -760px; width: 300px; height: 300px; object-fit: cover; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
 
 /* ---------- youtube (app.js: Tube, YtPage) ---------- */
 .yt-host { position: absolute; inset: 0; background: #000; pointer-events: none; }
