@@ -96,7 +96,7 @@ Theme.apply();
 
 /* ============ playback preferences (settings → playback) ============ */
 const Prefs = {
-  DEFAULTS: { npHide: 5, npArt: "hide", liveHide: 5, osdHide: 5, guideOk: "info", musicVol: 100, saver: 60, pip: "four", cc: false, ytcc: false, ytOpen: "native", fps: "on", npAnim: "zoom", guideNums: "on",
+  DEFAULTS: { npHide: 5, npArt: "hide", liveHide: 5, osdHide: 5, guideOk: "info", musicVol: 100, saver: 60, pip: "four", cc: false, ytcc: false, ytOpen: "native", fps: "on", npAnim: "zoom", saverLook: "zune", guideNums: "on",
     chHidden: [], chFav: [], guideSpan: 3, lastCh: true, startup: "home", clock: "12", textSize: "normal", nextEp: 10, skipBack: 10, skipFwd: 30 },
   load() { try { return { ...this.DEFAULTS, ...(JSON.parse(localStorage.getItem("mc.prefs")) || {}) }; } catch { return { ...this.DEFAULTS }; } },
   get(k) { return this.load()[k]; },
@@ -4267,6 +4267,7 @@ const SETTINGS_TABS = [
     options: [
       { label: "music info hides after", values: () => SECONDS([0, 3, 5, 8, 10, 15]), get: () => Prefs.get("npHide"), set: v => Prefs.set("npHide", v) },
       { label: "music screensaver", values: () => [[0, "off"], [30, "after 30 seconds"], [60, "after 1 minute"], [120, "after 2 minutes"], [300, "after 5 minutes"]], get: () => Prefs.get("saver"), set: v => { Prefs.set("saver", v); Saver.poke(); } },
+      { label: "screensaver look", values: () => [["zune", "zune hd (moving letters)"], ["crawl", "scrolling text + bio"]], get: () => Prefs.get("saverLook"), set: v => Prefs.set("saverLook", v) },
       { label: "album art when info hides", values: () => [["hide", "hide it"], ["center", "move to the middle"]], get: () => Prefs.get("npArt"), set: v => Prefs.set("npArt", v) },
       { label: "live tv info hides after", values: () => SECONDS([0, 3, 5, 8, 10]), get: () => Prefs.get("liveHide"), set: v => Prefs.set("liveHide", v) },
       { label: "player controls hide after", values: () => SECONDS([0, 3, 5, 8, 10, 15]), get: () => Prefs.get("osdHide"), set: v => Prefs.set("osdHide", v) },
@@ -5582,6 +5583,80 @@ const Remote = {
   },
 };
 
+/* ============ the Zune HD's music screensaver (settings → playback → screensaver look) ============
+   Like the Zune HD on a TV: over the dim artist photo, one tilted group — the artist and album in
+   giant thin letters, the album name in small capitals along their foot, the cover, the song and its
+   time — drifts slowly along its own slant. Every 17–23 seconds it changes direction: the group speeds
+   off along its slant, smearing as it fades; half a second of just the photo; then a new group, at a
+   new angle and moving the other way, slides in already moving and settles into the slow drift. */
+const ZuneSaver = {
+  ANGLES: [-58, -72, -84, -12, -34, -66, 6, -46],
+  host: null, shot: null, timer: null, angle: null, dir: 1, run: 0,
+  start(host) { this.host = host; this.stop(); this.next(true); },
+  stop() {
+    this.run++; clearTimeout(this.timer); this.timer = null;
+    if (this.host) this.host.querySelectorAll(".zh-shot").forEach(e => e.remove());
+    this.shot = null;
+  },
+  // a new song: change direction now, so the new names come in
+  song() { if (this.host && Saver.on) { clearTimeout(this.timer); this.next(); } },
+  build(t) {
+    const album = t.live ? t.station.title : t.album.title, artist = t.artist.name;
+    const e = el("div", "zh-shot");
+    e.innerHTML = `<img class="zh-art" alt=""><div class="zh-time"></div><div class="zh-song"></div>
+      <div class="zh-big"></div><div class="zh-mid"><b></b><span></span></div>`;
+    e.querySelector(".zh-big").textContent = [artist, album].filter(Boolean).join("  ");
+    e.querySelector(".zh-mid b").textContent = album || "";
+    e.querySelector(".zh-mid span").textContent = artist || "";
+    e.querySelector(".zh-song").textContent = t.title || "";
+    setCover(e.querySelector(".zh-art"), t.live ? t.station : t.album);
+    return e;
+  },
+  time() { const e = this.shot && this.shot.querySelector(".zh-time"); if (e) e.textContent = Player.track && !Player.track.live ? fmtT(Player.pos) : ""; },
+  async next(first) {
+    const run = ++this.run, t = Player.track;
+    clearTimeout(this.timer);
+    if (!t || !this.host) return;
+    if (this.shot) { await this.leave(this.shot); if (run !== this.run) return; await wait(500); if (run !== this.run) return; }
+    this.enter(Player.track || t);
+    this.timer = setTimeout(() => this.next(), (17 + Math.random() * 6) * 1000);
+  },
+  enter(t) {
+    const e = this.shot = this.build(t);
+    this.host.append(e);
+    this.time();
+    // a new angle each time (never the same twice), and the other direction
+    const choices = this.ANGLES.filter(a => a !== this.angle);
+    const a = this.angle = choices[Math.floor(Math.random() * choices.length)];
+    const dir = this.dir = -this.dir;
+    // which part of the long name is on screen: anywhere from the cover end to near the last letters
+    const bigW = e.querySelector(".zh-big").offsetWidth;
+    // the small capitals run the whole length of the giant letters (album, artist, album, artist…)
+    const mid = e.querySelector(".zh-mid"), one = mid.innerHTML, oneW = mid.offsetWidth || 1;
+    mid.innerHTML = Array(Math.max(1, Math.ceil(bigW / (oneW + 80)) + 1)).fill(one).join('<i class="zh-gap"></i>');
+    const tx = -Math.random() * Math.max(0, bigW - 700) + 200;
+    const T = x => `rotate(${a}deg) translate(${x}px, 0px)`;
+    const drift = (17 + Math.random() * 6 + 2) * 1000, entry = 900, total = entry + drift;
+    e._move = { a, dir, tx, drift, entry, total };
+    e._anim = e.animate([
+      { transform: T(tx - dir * 520), opacity: 0, offset: 0, easing: EASE },        // slides in, already moving…
+      { transform: T(tx), opacity: 1, offset: entry / total, easing: "linear" },    // …and settles
+      { transform: T(tx + dir * 900), opacity: 1, offset: 1 },                      // into the slow drift
+    ], { duration: total, fill: "forwards" });
+  },
+  // speeds off along its slant, smearing and fading
+  leave(e) {
+    const cur = getComputedStyle(e).transform, m = e._move;
+    if (e._anim) e._anim.cancel();
+    e.style.transform = cur;
+    const a = e.animate([
+      { transform: cur, opacity: 1, filter: "blur(0px)" },
+      { transform: `${cur} translate(${(m ? m.dir : 1) * 1700}px, 0px)`, opacity: 0, filter: "blur(10px)" },
+    ], { duration: 380, easing: "cubic-bezier(.55,0,.9,.5)", fill: "forwards" });
+    return done(a).then(() => e.remove());
+  },
+};
+
 /* ============ music screensaver (Zune "now playing" style) ============
    While music or radio plays and nothing has been pressed for a while (settings → playback →
    music screensaver), the screen fills with the artist's photos, slowly drifting and changing, with
@@ -5604,7 +5679,7 @@ const Saver = {
     this.el.innerHTML = `<div class="sv-bg"></div><div class="sv-shade"></div>
       <div class="sv-crawl a"><div></div></div><div class="sv-crawl b"><div></div></div><div class="sv-crawl c"><div></div></div>
       <div class="sv-now"><img class="sv-art" alt=""><div class="sv-tx"><div class="sv-t1"></div><div class="sv-t2 sc"></div><div class="sv-bar"><i></i></div></div></div>
-      <div class="sv-bio"></div>`;
+      <div class="sv-bio"></div><div class="sv-zune"></div>`;
     $stage.append(this.el);
     setInterval(() => this.tick(), 1000);
   },
@@ -5615,13 +5690,18 @@ const Saver = {
       return;
     }
     if (!Player.track) return this.hide();             // music stopped
-    if (Player.track !== this.shown || Player.track.title !== this.shownTitle) this.fill(); // next song (radio: new song info)
+    if (Player.track !== this.shown || Player.track.title !== this.shownTitle) { this.fill(); if (this.zune) ZuneSaver.song(); } // next song (radio: new song info)
+    if (this.zune) ZuneSaver.time();
     const d = Player.dur, bar = this.el.querySelector(".sv-bar i");
     bar.style.width = d && !Player.track.live ? Math.min(100, Player.pos / d * 100) + "%" : "0";
   },
   show() {
     this.on = true;
     this.fill();
+    // settings → playback → screensaver look: the Zune HD's moving letters, or the scrolling text
+    this.zune = Prefs.get("saverLook") !== "crawl";
+    this.el.classList.toggle("zh", this.zune);
+    if (this.zune) ZuneSaver.start(this.el.querySelector(".sv-zune"));
     this.el.classList.add("on");
     document.documentElement.classList.add("nopointer");
   },
@@ -5630,6 +5710,7 @@ const Saver = {
     this.on = false; this.poke();
     this.el.classList.remove("on");
     clearInterval(this.picTimer); clearInterval(this.bioTimer);
+    if (this.zune) setTimeout(() => { if (!this.on) ZuneSaver.stop(); }, 1700); // after the fade-out
   },
   async fill() {
     const t = Player.track; if (!t) return;
