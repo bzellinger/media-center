@@ -1,6 +1,6 @@
 # Media Center
 
-A full-screen app for a Windows PC. It is meant for a TV: big type, a simple menu, and a remote or keyboard.
+A full-screen app for a Windows PC inspired by the Zune HD. It is meant for a TV: big type, a simple menu, and a remote or keyboard.
 
 You can play music, movies, TV shows, home videos, and live TV from your own [Emby](https://emby.media) server, look through your photos, and play internet radio. YouTube opens in a separate app if you want it.
 
