@@ -1665,52 +1665,107 @@ const Radio = {
     t.album = { ...t.album, imgs: [art, t.station.img].filter(Boolean) };
     emit("track", 1);
   },
-  // Keeps the song name and artwork current, like the old hub:
-  // - every 1.5 s, ask the helper which song the station just announced in its stream (instant)
-  // - when it changes, show the new name right away, then check the station's song list every
-  //   2 s until its artwork for that song turns up
-  // - every 20 s, the song list anyway (and the only source when there's no helper)
+  // what AudioAddict says is on a station right now: { id, title, artist, ends } (ends: when the song
+  // finishes, in ms). The network-wide "currently playing" list changes the moment a song starts —
+  // much sooner than the station's song list, which can lag half a minute.
+  async current(t) {
+    const net = t.station.net.id;
+    const list = await fetch(`https://api.audioaddict.com/v1/${net}/currently_playing?_=${Date.now()}`, { cache: "no-store" })
+      .then(r => r.ok ? r.json() : null).catch(() => null);
+    const hit = Array.isArray(list) && list.find(x => x && Number(x.channel_id) === Number(t.station.id));
+    const tr = hit && hit.track;
+    if (tr && (tr.display_title || tr.title)) {
+      const start = Date.parse(tr.start_time || "") || 0, dur = Number(tr.duration || tr.length) || 0;
+      return { id: tr.id, title: tr.display_title || tr.title, artist: tr.display_artist || tr.artist || "", ends: start && dur ? start + dur * 1000 : 0 };
+    }
+    const h = (await this.history(t)).find(x => x && !x.ad && x.type !== "advertisement"); // (not in the list: the song list instead)
+    if (!h) return null;
+    const start = (Number(h.started) || 0) * 1000, dur = Number(h.duration || h.length) || 0;
+    return { id: h.track_id || h.id, title: h.title || h.display_title, artist: h.artist || h.display_artist || "", ends: start && dur ? start + dur * 1000 : 0, art: this.img(h.art_url, 800) };
+  },
+  // a song's cover, from its details (kept, so a song is only looked up once)
+  arts: new Map(),
+  async art(net, id) {
+    if (!id) return null;
+    if (this.arts.has(id)) return this.arts.get(id);
+    const d = await fetch(`https://api.audioaddict.com/v1/${net}/tracks/${id}`).then(r => r.ok ? r.json() : null).catch(() => null);
+    const url = this.img(d && d.images && d.images.default, 800);
+    if (url) this.arts.set(id, url);
+    return url;
+  },
+  // load a picture before showing it, so the new song and its cover arrive together (gives up after a while)
+  preload(url, ms = 1500) {
+    return !url ? Promise.resolve() : Promise.race([
+      new Promise(res => { const im = new Image(); im.onload = im.onerror = res; im.src = url; }),
+      wait(ms),
+    ]);
+  },
+  // Keeps the song name and cover current, the way the old Zune hub and the Kodi add-on do it:
+  // - AudioAddict's "currently playing" list says which song is on, with its id and when it ends; the
+  //   cover comes from that song's details and is loaded ahead. It's checked every 2 s near the end of
+  //   a song and less often in between.
+  // - With the helper, the stream itself announces each song the moment you hear it. That decides
+  //   WHEN to switch: the new name and its (already loaded) cover then come in together, once.
+  //   If AudioAddict hasn't caught up yet, it's asked again every second for a few seconds; after
+  //   that the name shows with the station's picture and the cover follows when it turns up.
+  // - Without the helper, the switch follows the "currently playing" list alone.
   watch(t) {
-    clearInterval(this.timer); clearInterval(this.fast); clearTimeout(this.burst);
+    clearTimeout(this.timer); clearInterval(this.fast); clearTimeout(this.burst);
     if (!t || !t.live) return;
     const mine = () => Player.track === t;
-    const same = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
-    const fromList = async () => {
-      if (!mine() || !Player.playing) return null; // paused: don't keep changing the artist / backdrop
-      const now = (await this.history(t))[0];
-      if (!now || !mine()) return null;
-      const title = now.title || now.display_title, artist = now.artist || now.display_artist;
-      // a song announced in the stream wins until the list catches up with it
-      if (t.icy && !(same(title, t.icy.title) && same(artist, t.icy.artist))) return false;
-      this.show(t, title, artist, this.img(now.art_url, 800));
-      return true;
-    };
-    const artBurst = (tries = 0) => {
-      clearTimeout(this.burst);
-      this.burst = setTimeout(async () => {
-        if (!mine()) return;
-        const got = await fromList();
-        if (got === false && tries < 20) artBurst(tries + 1); // the list hasn't caught up yet (up to ~40 s)
-      }, tries ? 2000 : 600);
-    };
+    const norm = x => String(x || "").toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "");
+    const match = (a, b) => !!(a && b) && norm(a.title) === norm(b.title) && (!norm(a.artist) || !norm(b.artist) || norm(a.artist) === norm(b.artist));
+    const net = t.station.net.id;
     const direct = new URL(t.stream, location.href).searchParams.get("url");
+    let api = null, heard = null, waiting = 0;
+    const put = x => this.show(t, x.title, x.artist, x.art || null);
+    const settle = () => {
+      if (!mine()) return;
+      if (direct && heard) {
+        if (match(api, heard)) { waiting = 0; return put(api); } // the name and its cover, together
+        if (match(heard, { title: t.title, artist: t.artist.name })) return; // already showing what you hear
+        if (waiting > 0) return;                                  // still giving AudioAddict a moment
+        return put({ title: heard.title, artist: heard.artist });  // it never caught up: the name alone
+      }
+      if (api) put(api);
+    };
+    const check = async () => {
+      clearTimeout(this.timer);
+      if (!mine()) return;
+      if (Player.playing) {
+        const cur = await this.current(t);
+        if (!mine()) return;
+        if (cur && (!api || cur.id !== api.id || !api.art)) {
+          cur.art = cur.art || await this.art(net, cur.id);
+          await this.preload(cur.art);
+          if (!mine()) return;
+          api = cur;
+        }
+        settle();
+      }
+      // when to look again: every 2 s in a song's last 45 s (and while waiting on a change), else later
+      const left = api && api.ends ? api.ends - Date.now() : 0;
+      const next = waiting > 0 ? 1000 : !Player.playing ? 5000 : !left ? 5000 : left <= 45000 ? 2000 : Math.min(15000, left - 45000);
+      if (waiting > 0) waiting--;
+      this.timer = setTimeout(check, next);
+    };
     if (direct) {
       this.fast = setInterval(async () => {
         if (!mine()) return clearInterval(this.fast);
         if (!Player.playing) return;
-        const cur = new URL(t.stream, location.href).searchParams.get("url") || direct; // (a backup address may be in use)
-        const m = await fetch(HELPER + "/radio/now?url=" + encodeURIComponent(cur), { headers: { "X-Media-Center": "1" }, cache: "no-store" })
+        const url = new URL(t.stream, location.href).searchParams.get("url") || direct; // (a backup address may be in use)
+        const m = await fetch(HELPER + "/radio/now?url=" + encodeURIComponent(url), { headers: { "X-Media-Center": "1" }, cache: "no-store" })
           .then(r => r.ok ? r.json() : null).catch(() => null);
-        if (!m || !m.raw || !mine() || (t.icy && t.icy.raw === m.raw)) return;
-        t.icy = m;
-        if (!same(m.title, t.title) || !same(m.artist, t.artist.name)) { // a new song: name now, artwork moments later
-          this.show(t, m.title, m.artist, null);
-          artBurst();
-        }
-      }, 1500);
+        if (!m || !m.raw || !mine() || (heard && heard.raw === m.raw)) return;
+        heard = { raw: m.raw, title: m.title, artist: m.artist };
+        if (match(api, heard)) return settle();   // AudioAddict already had it (and its cover is loaded)
+        waiting = 4;                              // ask AudioAddict now, then every second for ~4 s
+        check();
+        clearTimeout(this.burst);
+        this.burst = setTimeout(() => { waiting = 0; settle(); }, 4200);
+      }, 1000);
     }
-    fromList();
-    this.timer = setInterval(fromList, 20000);
+    check();
   },
 };
 const stationGrid = (items, focus) => Grid({ items, cols: 7, w: 220, h: 220, cell: CELL.station, focus });
