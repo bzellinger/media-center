@@ -20,7 +20,8 @@ Safety
     requests coming from other web pages (browsers mark those with an Origin header).
   * It will only ever start a file named VacuumTube.exe, and the voice assistant's app.py and
     local_listener_single_whisper.py from the folder set in settings → apps.
-  * The only files it reads for the app (besides its own) are .lrc lyrics files.
+  * The only files it reads for the app (besides its own) are .lrc lyrics files, and the voice
+    assistant's what_can_i_say.json (its list of voice commands) from the assistant folder.
   * "Sign in to youtube" opens only YouTube's own Google sign-in page, in the app's Edge profile.
   * YouTube "enter this code" sign-in: the long-lived pass stays in tools/apps.json; the app gets
     only short-lived, read-only access to your YouTube (subscriptions, playlists, likes).
@@ -532,6 +533,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if path == "/apps/youtube":
                 p = load_config().get("vacuumtube", "")
                 return self.send_json({"server": True, "path": p, "ready": bool(p) and os.path.isfile(p)})
+            if path == "/apps/assistant/commands":
+                return self.send_json({"server": True, **assistant_commands()})
             if path == "/apps/assistant":
                 folder = load_config().get("assistant", "")
                 return self.send_json({"server": True, "path": folder, "ready": bool(folder),
@@ -944,6 +947,34 @@ def valid_assistant(folder):
     if missing:
         return None, "that folder doesn't have " + " and ".join(missing)
     return os.path.abspath(folder), None
+
+
+# "What can I say?": the voice assistant keeps its own list of voice commands, what_can_i_say.json in
+# its folder (private, like the rest of the assistant). Only that one file is read, and only from the
+# assistant folder set in settings → apps. Shape: {"intro": "...", "groups": [{"name", "items": [{"say", "does"}]}]}
+ASSISTANT_COMMANDS_FILE = "what_can_i_say.json"
+
+
+def assistant_commands():
+    folder = load_config().get("assistant", "")
+    file = os.path.join(folder, ASSISTANT_COMMANDS_FILE) if folder else ""
+    if not file or not os.path.isfile(file) or os.path.getsize(file) > 512 * 1024:
+        return {"ready": False}
+    try:
+        with open(file, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        return {"ready": False, "error": f"the list in the assistant folder couldn't be read ({str(e)[:120]})"}
+    text = lambda x, n: str(x or "").strip()[:n]
+    groups = []
+    for g in (data.get("groups") if isinstance(data, dict) else None) or []:
+        if not isinstance(g, dict):
+            continue
+        items = [{"say": text(i.get("say"), 200), "does": text(i.get("does"), 300)}
+                 for i in g.get("items") or [] if isinstance(i, dict) and i.get("say")]
+        if text(g.get("name"), 40) and items:
+            groups.append({"name": text(g.get("name"), 40), "items": items[:200]})
+    return {"ready": bool(groups), "intro": text(data.get("intro"), 300), "groups": groups[:20]}
 
 
 def assistant_python(folder):

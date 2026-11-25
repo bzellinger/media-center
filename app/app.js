@@ -2194,6 +2194,30 @@ const Apps = {
   },
 };
 
+/* ============ what can I say? ============
+   The voice assistant's own list of voice commands (what_can_i_say.json in its folder, read by the
+   helper), one tab per group. It isn't part of the Media Center itself, so the commands stay as
+   private as the assistant. Opened from settings → apps, or by saying "what can I say". */
+const VOICE_ROW = v => el("div", "r-playlist", `<div class="tx"><div class="t1">“${esc(v.say)}”</div><div class="t2 sc">${esc(v.does)}</div></div>`);
+async function voiceHelpPage() {
+  const r = await Apps.call("/apps/assistant/commands");
+  if (!r.ready) {
+    const p = new Placeholder("what can i say", r.server === false ? "the helper isn't running — start the app with “Start Media Center”."
+      : r.error || "the voice assistant's list of commands shows here once its folder is set in settings → apps.");
+    p.heroName = null;
+    return p;
+  }
+  return new PivotPage({
+    title: "what can i say", subtitle: r.intro || "",
+    sections: r.groups.map(g => ({ name: lower(g.name), load: () => g.items, view: listView(116, VOICE_ROW), open: () => {} })),
+  });
+}
+async function showVoiceHelp() {
+  await settled();
+  if (top() && top().titleKey === "what can i say") return;
+  go(await voiceHelpPage());
+}
+
 /* ============ movies & tv ============ */
 function needEmby(name) {
   return new Placeholder(name, "sign in to your emby server in settings to see this.");
@@ -4756,7 +4780,9 @@ class SettingsPage extends Page {
     sec("voice assistant");
     this.vals.vaPath = this.vals.vaPath || "";
     const vfield = this.makeField({ id: "vaPath", label: "assistant folder", ph: "the folder with app.py, e.g. C:\\assistant" }, form);
-    const vbtns = this.makeButtons(form, [{ id: "saveVa", label: "save" }, { id: "startVa", label: "start it now" }]);
+    const vbtns = this.makeButtons(form, [{ id: "saveVa", label: "save" }, { id: "startVa", label: "start it now" }, { id: "vaHelp", label: "what can i say?" }]);
+    // "what can I say?" only shows once the assistant folder is set and has its list of commands
+    const help = vbtns.pop(); help.style.display = "none";
     this.vaStatusEl = el("div", "status t"); form.append(this.vaStatusEl);
     form.append(el("div", "set-note t", "“Start Media Center” starts it and its mic listener too, in minimized windows."));
     this.vaStatus("checking…");
@@ -4765,8 +4791,19 @@ class SettingsPage extends Page {
       if (st.server === false) return this.vaStatus("the helper isn't running — start the app with “Start Media Center”", "err");
       if (st.path && !this.vals.vaPath) { this.vals.vaPath = st.path; vfield.input.value = st.path; }
       this.vaStatus(st.running ? "running" : st.ready ? "set up — not running right now" : "not set up yet", st.running ? "ok" : "");
+      if (st.ready) this.showVoiceHelpButton(help, vbtns[vbtns.length - 1]);
     });
     return [field, ...btns, vfield, ...vbtns];
+  }
+  async showVoiceHelpButton(help, after) {
+    const r = await Apps.call("/apps/assistant/commands");
+    if (!r.ready || !this.el || SETTINGS_TABS[this.tab].build !== "apps" || this.items.includes(help)) return;
+    const i = this.items.indexOf(after);
+    if (i < 0) return;
+    help.style.display = "";
+    this.items.splice(i + 1, 0, help);
+    if (this.zone === "body" && this.f > i) this.f++; // (what's picked stays picked)
+    this.paint();
   }
   // the Shield: youtube hands over to the YouTube app; the voice assistant (on the PC with the mic)
   // sends its commands to this Shield instead of to the PC
@@ -4913,6 +4950,7 @@ class SettingsPage extends Page {
       else if (it.b.id === "testYt") Apps.launch();
       else if (it.b.id === "saveVa") this.saveAssistant();
       else if (it.b.id === "startVa") this.startAssistant();
+      else if (it.b.id === "vaHelp") showVoiceHelp();
       return true;
     }
     return false;
@@ -5336,6 +5374,7 @@ const WINDOWS = {
   recordings: "recordings", recorded: "recordings", dvr: "recordings", recordedtv: "recordings",
   settings: "settings", setup: "settings", youtube: "youtube",
   nowplaying: "player", fullscreen: "player", player: "player",
+  voicecommands: "voice", whatcanisay: "voice", voicehelp: "voice", commands: "voice",
 };
 
 // channels for voice tuning ("channel hallmark")
@@ -5498,6 +5537,7 @@ const RPC = {
     else if (w === "youtube") { if (Tube.native) await openSection("youtube"); else await Apps.launch(); }
     else if (w === "player") { if (!(await showPlayer())) throw new Error("nothing is playing"); }
     else if (w === "live") { if (Live.active) await showPlayer(); else await openSection("tv guide"); }
+    else if (w === "voice") await showVoiceHelp(); // "what can I say"
     else await openSection(w);
     return { window: w };
   },
