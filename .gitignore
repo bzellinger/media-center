@@ -24,3 +24,7 @@ README.txt
 android/
 Shield Install/
 .claude/
+
+# Radio artist picture addresses the helper has looked up (rebuilt as you listen)
+tools/artist_art.json
+tools/artist_art.json.tmp

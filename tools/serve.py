@@ -25,6 +25,9 @@ Safety
   * YouTube "enter this code" sign-in: the long-lived pass stays in tools/apps.json; the app gets
     only short-lived, read-only access to your YouTube (subscriptions, playlists, likes).
   * The guide copy (tools/guide_cache.json) holds listings only — never your Emby sign-in.
+  * Radio artist pictures: your fanart.tv key stays in tools/apps.json and is only sent to
+    fanart.tv; only artist names go to MusicBrainz and Deezer. tools/artist_art.json keeps the
+    picture addresses found.
 
 Python 3.8+ standard library only — nothing to install.
 """
@@ -32,6 +35,7 @@ import http.server
 import itertools
 import json
 import os
+import re
 import socketserver
 import subprocess
 import sys
@@ -269,6 +273,184 @@ def guide_search(params):
     }
 
 
+# ---------------------------------------------------------------- artist pictures (radio)
+# Like Kodi's Artist Slideshow: big photos of the artist playing on the radio. The artist is found on
+# MusicBrainz (so the right one is picked), then fanart.tv gives wide backgrounds and photos (with
+# your own key, set in settings → radio); Deezer fills in a photo when fanart.tv has none.
+# What's found is kept in tools/artist_art.json (picture addresses only), so each artist is looked
+# up once. Artists with nothing are tried again after a week, or as soon as a fanart.tv key is added.
+ART_FILE = os.path.join(HERE, "artist_art.json")
+ART_LOCK = threading.Lock()     # one lookup at a time (MusicBrainz allows one request a second)
+ART_CACHE = None
+ART_UA = "MediaCenter/1.0 (personal home media player)"
+MB_LAST = [0.0]
+
+
+def art_norm(name):
+    return re.sub(r"[^a-z0-9]+", "", str(name or "").lower().replace("&", "and"))
+
+
+def web_json(url, timeout=8):
+    """A web service's JSON answer; None when it says there's nothing (404)."""
+    import urllib.request
+    import urllib.error
+    req = urllib.request.Request(url, headers={"User-Agent": ART_UA, "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read(4 * 1024 * 1024) or b"null")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+
+
+def art_cache():
+    global ART_CACHE
+    if ART_CACHE is None:
+        try:
+            with open(ART_FILE, "r", encoding="utf-8") as f:
+                ART_CACHE = json.load(f)
+        except (OSError, ValueError):
+            ART_CACHE = {}
+    return ART_CACHE
+
+
+def save_art_cache():
+    cache = art_cache()
+    if len(cache) > 3000:  # the oldest go first
+        for k in sorted(cache, key=lambda k: cache[k].get("at", 0))[:len(cache) - 3000]:
+            del cache[k]
+    tmp = ART_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cache, f)
+    os.replace(tmp, ART_FILE)
+
+
+def mb_artist_id(name):
+    from urllib.parse import urlencode
+    wait = 1.1 - (time.time() - MB_LAST[0])
+    if wait > 0:
+        time.sleep(wait)
+    import urllib.error
+    q = re.sub(r'["\\]', "", name)
+    url = "https://musicbrainz.org/ws/2/artist/?" + urlencode({"query": f'artist:"{q}"', "fmt": "json", "limit": 5})
+    for attempt in range(3):  # MusicBrainz sometimes answers "busy" (503): wait a moment and ask again
+        try:
+            data = web_json(url)
+            break
+        except urllib.error.HTTPError as e:
+            if e.code != 503 or attempt == 2:
+                raise
+            time.sleep(2 + attempt * 2)
+        finally:
+            MB_LAST[0] = time.time()
+    want = art_norm(name)
+    for a in (data or {}).get("artists") or []:
+        names = [a.get("name"), a.get("sort-name")] + [x.get("name") for x in a.get("aliases") or []]
+        if int(a.get("score") or 0) >= 90 and want in (art_norm(n) for n in names):
+            return a.get("id")
+    return None
+
+
+def fanart_pics(mbid, key):
+    from urllib.parse import quote
+    d = web_json(f"https://webservice.fanart.tv/v3/music/{quote(mbid)}?api_key={quote(key)}")
+    best = lambda items: [x["url"] for x in sorted(items or [], key=lambda x: -int(x.get("likes") or 0)) if x.get("url")]
+    return (best((d or {}).get("artistbackground"))[:10], best((d or {}).get("artistthumb"))[:4])
+
+
+def deezer_photo(name):
+    from urllib.parse import urlencode
+    d = web_json("https://api.deezer.com/search/artist?" + urlencode({"q": name, "limit": 5}))
+    for a in (d or {}).get("data") or []:
+        p = a.get("picture_xl") or a.get("picture_big")
+        if art_norm(a.get("name")) == art_norm(name) and p and "/artist//" not in p:  # (an empty one is Deezer's blank picture)
+            return p
+    return None
+
+
+def look_up_artist(name, key):
+    """(wide, photos, sure): sure is False when MusicBrainz or fanart.tv couldn't be asked."""
+    wide, photos, sure = [], [], True
+    try:
+        mbid = mb_artist_id(name)
+        if mbid and key:
+            wide, photos = fanart_pics(mbid, key)
+    except Exception:
+        sure = False  # still try Deezer below, but don't keep the result
+    if not wide and not photos:
+        p = deezer_photo(name)
+        photos = [p] if p else []
+    return wide, photos, sure
+
+
+def artist_pictures(name):
+    """{"wide": [16:9 backgrounds], "photos": [square photos]} for an artist (both may be empty)."""
+    name = re.sub(r"\s+", " ", str(name or "")).strip()[:120]
+    k = art_norm(name)
+    if not k:
+        return {"wide": [], "photos": []}
+    key = str(load_config().get("fanart_key") or "")
+
+    def usable(hit):
+        if not hit:
+            return False
+        age = time.time() - hit.get("at", 0)
+        if hit.get("wide") or hit.get("photos"):
+            return age < 60 * 86400
+        return age < 7 * 86400 and hit.get("fanart") == bool(key)
+
+    hit = art_cache().get(k)
+    if usable(hit):
+        return {"wide": hit.get("wide") or [], "photos": hit.get("photos") or []}
+    with ART_LOCK:
+        hit = art_cache().get(k)
+        if usable(hit):
+            return {"wide": hit.get("wide") or [], "photos": hit.get("photos") or []}
+        try:
+            wide, photos, sure = look_up_artist(name, key)
+            # "A & B", "A feat. B", "A vs. B", "A, B": nothing for the pair, so the first artist's pictures
+            first = re.split(r"\s+(?:&|and|x|vs\.?|feat\.?|ft\.?|featuring|with|presents|pres\.)\s+|\s*[,/+]\s*", name, flags=re.I)[0].strip()
+            if not wide and not photos and first and art_norm(first) != k:
+                wide, photos, sure2 = look_up_artist(first, key)
+                sure = sure and sure2
+        except Exception as e:  # offline, or a service is down: nothing is kept, so it's tried again next time
+            return {"wide": [], "photos": [], "error": str(e)[:200]}
+        if not sure and not wide:  # a service didn't answer: show what Deezer had, but ask again next time
+            return {"wide": [], "photos": photos}
+        art_cache()[k] = {"at": time.time(), "wide": wide, "photos": photos, "fanart": bool(key)}
+        try:
+            save_art_cache()
+        except OSError:
+            pass
+        return {"wide": wide, "photos": photos}
+
+
+def save_fanart_key(key):
+    key = str(key or "").strip()
+    cfg = load_config()
+    if not key:
+        cfg.pop("fanart_key", None)
+        save_config(cfg)
+        return {"ok": True, "set": False}
+    if not re.fullmatch(r"[A-Za-z0-9]{16,64}", key):
+        return {"ok": False, "error": "that doesn't look like a fanart.tv key (letters and numbers only)"}
+    # try it on one well-known artist (Daft Punk) before keeping it
+    import urllib.error
+    checked = True
+    try:
+        fanart_pics("056e4f3e-d505-4dad-8ec1-d04f521cbb56", key)
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return {"ok": False, "error": "fanart.tv didn't accept that key"}
+        checked = False
+    except Exception:
+        checked = False
+    cfg["fanart_key"] = key
+    save_config(cfg)
+    return {"ok": True, "set": True, "checked": checked}
+
+
 # ---------------------------------------------------------------- web server
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -331,9 +513,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.send_json({"text": None})
             with open(file, "r", encoding="utf-8-sig", errors="replace") as f:
                 return self.send_json({"text": f.read()})
+        if path == "/art/artist":
+            # radio: big pictures of the artist playing (see artist_pictures)
+            if not self.trusted():
+                return self.send_json({"error": "not allowed"}, 403)
+            from urllib.parse import parse_qs
+            name = (parse_qs(urlparse(self.path).query).get("name") or [""])[0]
+            return self.send_json(artist_pictures(name))
         if path.startswith("/apps/"):
             if not self.trusted():
                 return self.send_json({"error": "not allowed"}, 403)
+            if path == "/apps/fanart":
+                return self.send_json({"server": True, "set": bool(load_config().get("fanart_key"))})
             if path == "/apps/youtube/account":
                 return self.send_json({"server": True, **yt_status()})
             if path == "/apps/youtube/token":
@@ -368,6 +559,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             cfg["vacuumtube"] = exe
             save_config(cfg)
             return self.send_json({"ok": True, "path": exe})
+        if path == "/apps/fanart/key":
+            return self.send_json(save_fanart_key(self.read_json().get("key")))
         if path == "/apps/youtube/launch":
             return self.send_json(launch_vacuumtube())
         if path == "/apps/youtube/signin":

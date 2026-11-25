@@ -33,6 +33,10 @@ html, body {
   opacity: 0; transition: transform 900ms var(--ease), opacity 700ms ease;
 }
 #bg.drift img { animation: bgdrift 46s ease-in-out infinite alternate; }
+/* radio with no artist photos: the small song cover blurred and darkened (stretched sharp, it looks blocky) */
+/* square artist photos fill a wide screen: keep faces (near the top) in view */
+#bg img, .np-bg img, .sv-bg img { object-position: 50% 25%; }
+#bg img.soft { filter: blur(40px) brightness(.6) saturate(1.15); scale: 1.12; }
 @keyframes bgdrift { from { scale: 1.04; translate: 0 0; } to { scale: 1.18; translate: -9% -3%; } }
 /* artist biography (music → artist → bio) */
 .bio-in { max-width: 1480px; padding-top: 30px; will-change: transform; }
@@ -682,6 +686,7 @@ html.native .vlayer, html.native .vlayer.multi, html.native .lv-video, html.nati
 .saver.zh .sv-crawl, .saver.zh .sv-now, .saver.zh .sv-bio { display: none; }
 .saver.zh .sv-shade { background: rgba(0,0,0,.62); }
 .saver.zh .sv-bg img { filter: grayscale(.35); }
+.saver .sv-bg img.soft { filter: blur(28px) brightness(.7) saturate(1.1); inset: -10%; width: 120%; height: 120%; } /* radio: a small cover, softened */
 /* ---------- the screensaver for when nothing is playing (app.js: IdleSaver) ---------- */
 .saver.idle { z-index: 61; }
 .saver.idle .sv-shade { background: linear-gradient(90deg, rgba(0,0,0,.78), rgba(0,0,0,.35) 60%, rgba(0,0,0,.5)); }
@@ -776,7 +781,7 @@ html.native .vlayer, html.native .vlayer.multi, html.native .lv-video, html.nati
 
 /* ---------- radio on the now playing screen ---------- */
 .np.live .np-times, .np.live .np-bar { visibility: hidden; }  /* a live stream has no length */
-.np.live .np-bg img { filter: blur(28px) brightness(.55) saturate(1.1); } /* the song cover, softened, as the backdrop */
+.np-bg img.soft { filter: blur(28px) brightness(.55) saturate(1.1); } /* radio with no artist photos: the song cover, softened, as the backdrop */
 
 /* ---------- settings: notes, hidden menu items ---------- */
 .set-note { margin: 30px 0 0; max-width: 1150px; font-size: 26px; line-height: 1.45; font-weight: 400; color: var(--sub); }

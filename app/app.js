@@ -149,6 +149,8 @@ function visibleT(root) {
     return r.bottom > b.top && r.top < b.bottom && r.right > 0 && r.left < W;
   });
 }
+// The fades below leave out full brightness on purpose: each piece fades from / to its OWN brightness,
+// so dimmed words (the hub menu beside quickplay) stay dim while the screen comes and goes.
 const cancelTurn = e => e.getAnimations().forEach(a => a.id === "turn" && a.cancel());
 // Zoom an item by `s` around the middle of the screen, so a whole page moves together like a camera.
 // Items keep their own pivot (their center); the shift toward/away from the screen center is worked
@@ -167,7 +169,7 @@ function turnIn(els, dir, { dur = 520, stagger = 22, delay = 0 } = {}) {
     cancelTurn(e);
     return done(e.animate([
       { opacity: 0, transform: zoomAbout(e, dir > 0 ? 0.86 : 1.14) },
-      { opacity: 1, transform: "translate(0px, 0px) scale(1)" },
+      { transform: "translate(0px, 0px) scale(1)" },
     ], { id: "turn", duration: dur, delay: delay + i * stagger, easing: EASE, fill: "backwards" }));
   }));
 }
@@ -177,7 +179,7 @@ function turnOut(els, dir, { dur = 240, stagger = 12 } = {}) {
   return Promise.all(els.map((e, i) => {
     cancelTurn(e);
     return done(e.animate([
-      { opacity: 1, transform: "translate(0px, 0px) scale(1)" },
+      { transform: "translate(0px, 0px) scale(1)" },
       { opacity: 0, transform: zoomAbout(e, dir > 0 ? 1.14 : 0.88) },
     ], { id: "turn", duration: dur, delay: i * stagger, easing: EASE_IN, fill: "forwards" }));
   }));
@@ -206,7 +208,7 @@ function titleIn(els, dir, delay = 0) {
 function subIn(els, dir, delay = 160) {
   return Promise.all(els.map(e => done(e.animate([
     { opacity: 0, transform: `translateX(${dir > 0 ? 160 : -160}px)` },
-    { opacity: 1, transform: "none" },
+    { transform: "none" },
   ], { id: "turn", duration: 550, delay, easing: EASE, fill: "backwards" }))));
 }
 
@@ -217,13 +219,13 @@ function flipIn(els, dir, delay = 120) {
     e.style.transformOrigin = "50% 50%";
     return done(e.animate([
       { opacity: 0, transform: `scale(${dir > 0 ? 0.8 : 1.15})` },
-      { opacity: 1, transform: "scale(1)" },
+      { transform: "scale(1)" },
     ], { id: "turn", duration: 600, delay, easing: EASE, fill: "backwards" }));
   }));
 }
 function flipOut(els, dir) {
   return Promise.all(els.map(e => done(e.animate([
-    { opacity: 1, transform: "scale(1)" },
+    { transform: "scale(1)" },
     { opacity: 0, transform: `scale(${dir > 0 ? 1.15 : 0.85})` },
   ], { id: "turn", duration: 260, easing: EASE_IN, fill: "forwards" }))));
 }
@@ -235,7 +237,7 @@ function slideIn(els, dir, { dist = 230, dur = 600, stagger = 42 } = {}) {
     cancelTurn(e);
     return done(e.animate([
       { opacity: 0, transform: `translateX(${dir * dist}px)` },
-      { opacity: 1, transform: "none" },
+      { transform: "none" },
     ], { id: "turn", duration: dur, delay: i * stagger, easing: EASE, fill: "backwards" }));
   }));
 }
@@ -244,7 +246,7 @@ function slideOut(els, dir, { dist = 180, dur = 230, stagger = 30 } = {}) {
   return Promise.all(els.map((e, i) => {
     cancelTurn(e);
     return done(e.animate([
-      { opacity: 1, transform: "none" },
+      { transform: "none" },
       { opacity: 0, transform: `translateX(${-dir * dist}px)` },
     ], { id: "turn", duration: dur, delay: i * stagger, easing: EASE_IN, fill: "forwards" }));
   }));
@@ -458,7 +460,7 @@ function dockOut(els, { dur = 300, stagger = 28 } = {}) {
   stagger = Math.min(stagger, 160 / Math.max(1, els.length)); // however many pieces, all on their way within ~0.16 s
   return Promise.all(els.map((e, i) => {
     cancelTurn(e);
-    return done(e.animate(dockFrames(e, { a: 0, opacity: 1 }, { a: 72, opacity: 0 }), { id: "turn", duration: dur, delay: i * stagger, easing: DOCK_FOLD, fill: "forwards" }));
+    return done(e.animate(dockFrames(e, { a: 0, opacity: +getComputedStyle(e).opacity }, { a: 72, opacity: 0 }), { id: "turn", duration: dur, delay: i * stagger, easing: DOCK_FOLD, fill: "forwards" }));
   }));
 }
 function dockIn(els, { dur = 460, delays } = {}) {
@@ -468,8 +470,9 @@ function dockIn(els, { dur = 460, delays } = {}) {
   els.forEach(e => { e.style.scale = "1"; });
   return Promise.all(els.map((e, i) => {
     cancelTurn(e);
-    const f = dockFrames(e, { a: 84, opacity: 0 }, { a: 0, opacity: 1 });
-    f.splice(1, 0, { opacity: 1, offset: 0.3 });
+    const o = +getComputedStyle(e).opacity; // its own brightness (dimmed words stay dim)
+    const f = dockFrames(e, { a: 84, opacity: 0 }, { a: 0, opacity: o });
+    f.splice(1, 0, { opacity: o, offset: 0.3 });
     return done(e.animate(f, { id: "turn", duration: dur, delay: delays ? delays[i] ?? i * 25 : Math.min(i * 26, 320), easing: DOCK_SWING, fill: "backwards" }));
   })).then(() => {
     reclip();
@@ -587,13 +590,14 @@ async function heroBack(cur, prev, name) {
 }
 
 // background picture behind the current screen (falls back to a generated one if it won't load)
-let bgSrc = null, bgTimer = null;
+let bgSrc = null, bgTimer = null, bgWaiting = false, bgBlend = null;
 function applyBg(p) {
   const b = p.bg();
   const src = b.src || Art.wallpaper();
+  if (bgBlend) { bgBlend.remove(); bgBlend = null; } // (a blend still running: this replaces it)
   $bgImg.style.transform = `translateX(${b.x || 0}px)`;
   $bgImg.parentNode.classList.toggle("drift", !!b.drift); // the picture slowly drifts and zooms (artist pages)
-  clearTimeout(bgTimer);
+  clearTimeout(bgTimer); bgWaiting = false;
   // no clock over full screen playback (watching tv, music now playing)
   $stage.classList.toggle("fullplay", p instanceof LivePage || p instanceof NowPlaying || p instanceof PhotoPage);
   // live tv playing full screen behind the menus replaces the background picture
@@ -603,14 +607,40 @@ function applyBg(p) {
   if (BgVod.active && Live.bgMode !== "corner") { $bgImg.style.opacity = 0; return; } // a movie playing behind the menus
   if (src !== bgSrc) {
     bgSrc = src;
-    $bgImg.style.opacity = 0;
+    $bgImg.style.opacity = 0; bgWaiting = true;
     bgTimer = setTimeout(() => {
+      bgWaiting = false;
       $bgImg.onerror = () => { $bgImg.onerror = null; $bgImg.src = b.fallback || Art.wallpaper(); };
+      $bgImg.classList.toggle("soft", !!b.soft); // a small cover: blurred and darkened, not stretched
       $bgImg.src = src; $bgImg.style.opacity = b.opacity;
     }, 350);
   } else {
+    $bgImg.classList.toggle("soft", !!b.soft);
     $bgImg.style.opacity = b.opacity;
   }
+}
+// Same screen, new picture (radio: the artist's photos arriving, or taking turns): the new one fades
+// in over the old one, with no dip to black in between. The picture should already be loaded.
+function blendBg(p) {
+  const b = p.bg(), src = b.src;
+  if (!src || src === bgSrc) return;
+  if (bgWaiting || bgBlend || Live.active || BgVod.active || $bgImg.style.opacity === "0") return applyBg(p);
+  const over = $bgImg.cloneNode(false);
+  over.removeAttribute("id"); over.onerror = null;
+  over.classList.toggle("soft", !!b.soft);
+  over.style.opacity = 0; over.src = src;
+  $bgImg.after(over); bgBlend = over; bgSrc = src;
+  void over.offsetWidth; // commit the starting opacity so the fade runs
+  over.style.opacity = b.opacity;
+  setTimeout(() => {
+    if (bgBlend !== over) return;
+    // the main picture takes the new one, then the copy on top goes
+    $bgImg.onerror = () => { $bgImg.onerror = null; $bgImg.src = b.fallback || Art.wallpaper(); };
+    $bgImg.classList.toggle("soft", !!b.soft);
+    $bgImg.src = src;
+    const done = () => { if (bgBlend === over) { over.remove(); bgBlend = null; } };
+    $bgImg.decode().then(done, done);
+  }, 900);
 }
 
 /* ============ lists & grids ============ */
@@ -1155,7 +1185,7 @@ class Home extends Page {
   }
   bg() {
     const t = Live.active ? null : Player.track; // with tv on, the artist backdrop of paused music would be stale
-    return { src: t ? artistPhoto(t.artist) : Art.wallpaper(), fallback: t ? Art.photo(t.artist.name, t.artist.hue) : null, opacity: 0.9, x: -280 + this.sec * 280 };
+    return { src: t ? artistPhoto(t.artist) : Art.wallpaper(), fallback: t ? Art.photo(t.artist.name, t.artist.hue) : null, opacity: 0.9, x: -280 + this.sec * 280, soft: softArtist(t) };
   }
   // menu word to grow into the next page's title
   hero(page) { return this.sec === 0 && page.heroName === this.mid ? this.heroItem(this.mid) : null; }
@@ -1661,9 +1691,16 @@ const Radio = {
   show(t, title, artist, art) {
     if (title === t.title && artist === t.artist.name && (!art || (t.album.imgs || [])[0] === art)) return;
     t.title = title || t.station.title;
-    t.artist = { name: artist || t.station.net.name, hue: Emby.hashHue(artist || t.station.net.name), photo: art || t.station.img };
+    const who = artist || t.station.net.name;
+    // the same artist again (or the cover arriving late): their photos stay up, still sliding
+    if (!(t.artist.pics && t.artist.name === who)) {
+      const pics = ArtistArt.known(artist); // found earlier (and loaded): they come in with the song
+      t.artist = pics ? { name: who, hue: Emby.hashHue(who), pics, pick: 0, photo: pics[0] }
+        : { name: who, hue: Emby.hashHue(who), photo: art || t.station.img };
+    }
     t.album = { ...t.album, imgs: [art, t.station.img].filter(Boolean) };
     emit("track", 1);
+    ArtistArt.attach(t);
   },
   // what AudioAddict says is on a station right now: { id, title, artist, ends } (ends: when the song
   // finishes, in ms). The network-wide "currently playing" list changes the moment a song starts —
@@ -1737,6 +1774,7 @@ const Radio = {
         if (!mine()) return;
         if (cur && (!api || cur.id !== api.id || !api.art)) {
           cur.art = cur.art || await this.art(net, cur.id);
+          ArtistArt.warm(cur.artist); // (the artist's photos get a head start, while the cover loads)
           await this.preload(cur.art);
           if (!mine()) return;
           api = cur;
@@ -1768,7 +1806,76 @@ const Radio = {
     check();
   },
 };
-const stationGrid = (items, focus) => Grid({ items, cols: 7, w: 220, h: 220, cell: CELL.station, focus });
+
+/* Radio artist slideshow, like Kodi's Artist Slideshow: big photos of the artist on now, sliding
+   behind the song on the home screen, now playing and the screensaver. Your Emby pictures come
+   first (when the artist is in your library); otherwise the helper looks the artist up on fanart.tv
+   (with your key, settings → radio) and Deezer. Each artist is looked up once. With nothing found,
+   the song's cover stays, blurred and darkened (the "soft" look), so its low resolution doesn't show. */
+const ArtistArt = {
+  seen: new Map(),
+  get(name) {
+    const k = String(name || "").trim().toLowerCase();
+    if (!k || NATIVE) return Promise.resolve([]);
+    if (!this.seen.has(k)) {
+      const p = (async () => {
+        const e = Emby.connected ? await Emby.artistInfo({ name }).catch(() => null) : null;
+        if (e && e.backdrops.length) return e.backdrops;
+        const r = await fetch(HELPER + "/art/artist?name=" + encodeURIComponent(name), { headers: { "X-Media-Center": "1" }, cache: "no-store" })
+          .then(r => r.ok ? r.json() : null).catch(() => null);
+        if (!r || r.error) this.seen.delete(k); // the helper or a service didn't answer: ask again next time
+        return r ? ((r.wide && r.wide.length ? r.wide : r.photos) || []) : [];
+      })();
+      this.seen.set(k, p);
+    }
+    return this.seen.get(k);
+  },
+  forget() { this.seen.clear(); this.ready.clear(); }, // after the fanart.tv key changes
+  // artists whose photos are found and the first one loaded: they arrive together with the song
+  ready: new Map(),
+  // start looking as soon as the next song is known (often before you hear it), so its photos are ready
+  async warm(name) {
+    const k = String(name || "").trim().toLowerCase();
+    if (!k || this.ready.has(k)) return this.ready.get(k);
+    const pics = (await this.get(name)).filter(Boolean);
+    if (!pics.length) return null;
+    await Radio.preload(pics[0], 6000);
+    this.ready.set(k, pics);
+    return pics;
+  },
+  known(name) { return this.ready.get(String(name || "").trim().toLowerCase()) || null; },
+  // a first-time artist: their photos blend in once found (and loaded), while that song is still on.
+  // Only the background changes: no new-song animation, and hidden song info stays hidden.
+  async attach(t) {
+    const a = t.artist;
+    if (!t.live || !a || a.pics || !a.name || a.name === t.station.net.name) return;
+    const pics = await this.warm(a.name);
+    if (!pics || Player.track !== t || t.artist !== a) return;
+    t.artist = { ...a, pics, pick: 0, photo: pics[0] };
+    this.repaint(t);
+    if (Saver.on && Saver.shown === t) Saver.setPics(pics);
+  },
+  repaint(t) {
+    const p = top(); if (!p || !p.el) return;
+    if (p instanceof NowPlaying) p.setBg(t);
+    else if (p instanceof Home) blendBg(p);
+  },
+  // every 20 s the next photo, loaded first so it fades in whole
+  tick() {
+    const t = Player.track, a = t && t.artist;
+    if (!t || !t.live || !a || !a.pics || a.pics.length < 2 || Live.active) return;
+    const n = (a.pick + 1) % a.pics.length;
+    Radio.preload(a.pics[n], 8000).then(() => {
+      if (Player.track !== t || t.artist !== a) return;
+      a.pick = n; a.photo = a.pics[n];
+      this.repaint(t);
+    });
+  },
+};
+setInterval(() => ArtistArt.tick(), 20000);
+// a radio artist with nothing better than the song's small cover (or the station's picture)
+const softArtist = t => !!(t && t.live && !(t.artist && t.artist.pics));
+const stationGrid =(items, focus) => Grid({ items, cols: 7, w: 220, h: 220, cell: CELL.station, focus });
 function radioPage() {
   return new PivotPage({
     title: "radio", heroName: "radio",
@@ -4516,15 +4623,46 @@ class SettingsPage extends Page {
     Prefs.set("menu", layout);
     const f = this.f; this.buildTab(); this.f = f; this.paint();
   }
+  // one column: the stations' listen key, then the fanart.tv key for big artist pictures
   buildRadio() {
-    const form = el("div", "form"); this.body.append(form);
+    const form = el("div", "form stack"); this.body.append(form);
+    const sec = t => form.append(el("div", "set-sec t", esc(t)));
+    sec("stations");
     if (this.vals.radioKey === undefined) this.vals.radioKey = Prefs.get("radioKey") || "";
-    this.makeField({ id: "radioKey", label: "listen key", ph: "your premium listen key", secret: true }, form);
+    const kfield = this.makeField({ id: "radioKey", label: "listen key", ph: "your premium listen key", secret: true }, form);
     const btns = this.makeButtons(form, [{ id: "saveRadio", label: "save" }]);
     this.statusEl = el("div", "status t"); form.append(this.statusEl);
     form.append(el("div", "set-note t", "one premium listen key works for di.fm, radiotunes, jazzradio, rockradio, classical radio and zenradio. find it on any of those sites under player settings → hardware player."));
     this.setStatus(Radio.key ? "a listen key is saved" : "no listen key yet", Radio.key ? "ok" : "");
-    return [...this.rows, ...btns];
+
+    // the key itself stays with the helper (tools/apps.json), never in the app
+    sec("artist pictures");
+    this.vals.fanartKey = this.vals.fanartKey || "";
+    const ffield = this.makeField({ id: "fanartKey", label: "fanart.tv key", ph: "your personal api key from fanart.tv", secret: true }, form);
+    const fbtns = this.makeButtons(form, [{ id: "saveFanart", label: "save" }, { id: "clearFanart", label: "remove" }]);
+    this.vaStatusEl = el("div", "status t"); form.append(this.vaStatusEl);
+    form.append(el("div", "set-note t", "while radio plays, big photos of the artist slide behind the song (your emby pictures first when you have the artist). with a fanart.tv key there are many more, and wide ones. artists with no photos anywhere get their song cover, blurred."));
+    this.vaStatus("checking…");
+    Apps.call("/apps/fanart").then(st => {
+      if (!this.el || !this.vaStatusEl || SETTINGS_TABS[this.tab].build !== "radio") return;
+      if (st.server === false) return this.vaStatus("the helper isn't running — start the app with “Start Media Center”", "err");
+      if (st.set && !ffield.input.value) ffield.input.placeholder = "saved — type a new one to replace it";
+      this.vaStatus(st.set ? "a fanart.tv key is saved" : "no fanart.tv key yet — only deezer photos for now", st.set ? "ok" : "");
+    });
+    return [kfield, ...btns, ffield, ...fbtns];
+  }
+  async saveFanart(remove) {
+    const field = this.rows.find(r => r.fd.id === "fanartKey");
+    const key = remove ? "" : String(field.input.value || "").trim();
+    if (!remove && !key) return this.vaStatus("type the key first", "err");
+    this.vaStatus(remove ? "removing…" : "checking the key with fanart.tv…", "busy");
+    const r = await Apps.call("/apps/fanart/key", { key });
+    if (r.server === false) return this.vaStatus("the helper isn't running — start the app with “Start Media Center”", "err");
+    if (!r.ok) return this.vaStatus(r.error || "couldn't save that", "err");
+    ArtistArt.forget(); // artists looked up without the key get another try
+    this.vals.fanartKey = ""; field.input.value = "";
+    field.input.placeholder = r.set ? "saved — type a new one to replace it" : "your personal api key from fanart.tv";
+    this.vaStatus(!r.set ? "key removed" : r.checked ? "saved — the key works" : "saved (fanart.tv didn't answer, so it wasn't checked)", r.set ? "ok" : "");
   }
   // one column, read top to bottom: your key (+ premium sign-in), where youtube opens, your account
   buildYouTube() {
@@ -4763,6 +4901,8 @@ class SettingsPage extends Page {
       else if (it.b.id === "connect") this.connect();
       else if (it.b.id === "signout") this.signOut();
       else if (it.b.id === "saveRadio") this.saveRadio();
+      else if (it.b.id === "saveFanart") this.saveFanart(false);
+      else if (it.b.id === "clearFanart") this.saveFanart(true);
       else if (it.b.id === "saveYt") this.saveYouTube();
       else if (it.b.id === "saveYtKey") this.saveYtKey();
       else if (it.b.id === "saveYtClient") this.saveYtClient();
@@ -4998,12 +5138,14 @@ class NowPlaying extends Page {
     if (Lyrics.on || this.lyr) this.lyrics();
   }
   setBg(t) {
-    if (this.bgArtist === t.artist) return;
-    this.bgArtist = t.artist;
+    const src = artistPhoto(t.artist); // (radio: the artist's photos take turns, see ArtistArt)
+    if (this.bgArtist === t.artist && this.bgSrc === src) return;
+    this.bgArtist = t.artist; this.bgSrc = src;
     const wrap = this.q(".np-bg"), img = el("img");
     img.alt = ""; img.style.opacity = 0;
+    img.classList.toggle("soft", softArtist(t)); // radio with only the song's cover: blurred behind
     img.onerror = () => { img.onerror = null; img.src = Art.photo(t.artist.name, t.artist.hue); };
-    img.src = artistPhoto(t.artist);
+    img.src = src;
     const olds = [...wrap.children];
     wrap.append(img);
     void img.offsetWidth; // commit the starting opacity so the fade runs
@@ -5973,23 +6115,25 @@ const Saver = {
     this.el.querySelector(".sv-t2").textContent = [t.artist.name, t.live ? `${t.station.title} · ${t.station.net.name}` : t.album.title].filter(Boolean).join(" · ");
     this.el.querySelector(".sv-bio").textContent = "";
     // pictures: the artist's backdrops from Emby, else the artist photo / song cover we already have
-    this.setPics([artistPhoto(t.artist)]);
+    // (radio: the photos ArtistArt found, or the song's cover blurred)
+    this.setPics(t.artist.pics || [artistPhoto(t.artist)], softArtist(t));
     clearInterval(this.bioTimer);
     const info = Emby.connected ? await Emby.artistInfo(t.artist) : null;
     if (Player.track !== t || !this.on) return;
-    if (info && info.backdrops.length) this.setPics(info.backdrops);
+    if (info && info.backdrops.length && !t.artist.pics) this.setPics(info.backdrops);
     if (info && info.bio) this.bio(info.bio);
   },
-  setPics(list) {
+  setPics(list, soft = false) {
     this.pics = list.filter(Boolean); this.pic = 0;
     clearInterval(this.picTimer);
-    this.addPic(this.pics[0]);
+    this.addPic(this.pics[0], soft);
     if (this.pics.length > 1) this.picTimer = setInterval(() => { this.pic = (this.pic + 1) % this.pics.length; this.addPic(this.pics[this.pic]); }, 16000);
   },
-  addPic(src) { // a new photo fades in over the last one, each drifting a different way
+  addPic(src, soft = false) { // a new photo fades in over the last one, each drifting a different way
     if (!src) return;
     const bg = this.el.querySelector(".sv-bg"), img = el("img");
     img.alt = ""; img.src = src;
+    if (soft) img.classList.add("soft"); // a small cover, blurred instead of stretched
     img.style.animationName = "svdrift" + (1 + Math.floor(Math.random() * 3));
     img.onload = () => {
       img.classList.add("in");
