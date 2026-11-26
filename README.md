@@ -4,6 +4,21 @@ A full-screen app for a Windows PC inspired by the Zune HD. It is meant for a TV
 
 You can play music, movies, TV shows, home videos, and live TV from your own [Emby](https://emby.media) server, look through your photos, and play internet radio. YouTube opens in a separate app if you want it.
 
+<img width="3840" height="2160" alt="image" src="https://github.com/user-attachments/assets/1b100958-033a-45c6-882c-70da72409e3b" />
+
+<img width="3840" height="2160" alt="image" src="https://github.com/user-attachments/assets/c3c8ec9d-9c95-4133-b9db-9cb1680cbb01" />
+
+<img width="3840" height="2160" alt="image" src="https://github.com/user-attachments/assets/d2ff83f8-4e2f-4e1e-bfd8-521d8af7379e" />
+
+<img width="3840" height="2160" alt="image" src="https://github.com/user-attachments/assets/41d2f2d1-0b4a-430e-99de-d8801b6061fd" />
+
+<img width="3840" height="2160" alt="image" src="https://github.com/user-attachments/assets/291546e3-28f3-400b-8b5e-f108537a6253" />
+
+<img width="3840" height="2160" alt="image" src="https://github.com/user-attachments/assets/dba21aa6-c469-4f36-b801-2ec138f411e7" />
+
+<img width="3840" height="2160" alt="image" src="https://github.com/user-attachments/assets/5f73d47f-bda3-4b54-90f6-3fde8c4b13ec" />
+
+
 ## What you need
 
 - Windows
