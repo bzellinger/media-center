@@ -773,6 +773,13 @@ const CELL = {
   },
 };
 
+// a person in a cast list: the artist's round photo, with the part they played underneath
+CELL.person = p => {
+  const t = CELL.artist(p);
+  t.append(el("div", "rl", esc(p.role || "")));
+  return t;
+};
+
 const listView = (itemH, row) => (items, focus) => List({ items, itemH, row, focus });
 const albumGrid = (items, focus) => Grid({ items, cols: 7, w: 220, h: 220, cell: CELL.album, focus });
 const artistGrid = (items, focus) => Grid({ items: items.filter(a => !a.letter), cols: 7, w: 220, h: 276, gap: 30, cell: CELL.artist, focus });
@@ -2212,6 +2219,30 @@ async function voiceHelpPage() {
     sections: r.groups.map(g => ({ name: lower(g.name), load: () => g.items, view: listView(116, VOICE_ROW), open: () => {} })),
   });
 }
+/* ============ guide answers ============
+   When the voice assistant finds several things for "is football on?" or "any christmas movies
+   tonight?", it says the first one or two and puts the whole list here. Pick one to watch that
+   channel. While you're watching tv it doesn't take over the screen: it only says them. */
+function guideResultsPage(heading, items) {
+  const progs = items.map(m => ({
+    title: m.name || m.episodeTitle || "program", ep: m.episodeTitle && m.episodeTitle !== m.name ? m.episodeTitle : "",
+    start: Number(m.startMs) || Date.parse(m.startDate), end: Number(m.endMs) || Date.parse(m.endDate),
+    isMovie: !!m.isMovie, ch: { name: m.channelName || "", number: m.channelNumber || "" },
+  }));
+  return new PivotPage({
+    title: "on the guide", subtitle: lower(heading || ""),
+    sections: [{ name: "found", load: () => progs, view: listView(110, ROW.program),
+      open: p => tuneChannel(p.ch.number || p.ch.name).catch(e => toast(lower(e.message))) }],
+  });
+}
+async function showGuideResults(p) {
+  const items = Array.isArray(p.items) ? p.items.slice(0, 40) : [];
+  if (!items.length) return { shown: false };
+  if (top() instanceof LivePage && !p.force) return { shown: false, watching: true };
+  await settled();
+  go(guideResultsPage(String(p.title || ""), items), { replace: !!(top() && top().titleKey === "on the guide") });
+  return { shown: true };
+}
 async function showVoiceHelp() {
   await settled();
   if (top() && top().titleKey === "what can i say") return;
@@ -2391,11 +2422,27 @@ class VideoPage extends Page {
     this.btnEls = [];
     if (v.resume > 60) this.btnEls.push(el("div", "btn", `resume ${fmtLong(v.resume)}`));
     this.btnEls.push(el("div", "btn", v.resume > 60 ? "from start" : "play"));
+    if (v.people && v.people.length) this.btnEls.push(this.castBtn());
     if (v.rec) { const d = el("div", "btn", "delete"); d.dataset.id = "delete"; this.btnEls.push(d); }
     btns.append(...this.btnEls); info.append(btns);
     r.append(info);
     this.paint();
     return r;
+  }
+  castBtn() { const b = el("div", "btn", "cast &amp; crew"); b.dataset.id = "cast"; return b; }
+  // cast & crew comes from Emby after the page opens; the button slides in once there's someone to show
+  mounted() {
+    const v = this.v;
+    if (v.people !== undefined || !v.emby || v.home || !Emby.connected) return;
+    v.people = null; // (asking)
+    Emby.people(v).then(list => { v.people = list; }, () => { v.people = undefined; }).then(() => {
+      if (!this.el || !v.people || !v.people.length || this.btnEls.some(b => b.dataset.id === "cast")) return;
+      const b = this.castBtn(), del = this.btnEls.findIndex(x => x.dataset.id === "delete");
+      if (del >= 0) { this.btnEls[del].before(b); this.btnEls.splice(del, 0, b); if (this.f >= del) this.f++; }
+      else { this.btnEls[this.btnEls.length - 1].after(b); this.btnEls.push(b); }
+      this.paint();
+      turnIn([b], 1);
+    });
   }
   paint() { this.btnEls.forEach((b, i) => b.classList.toggle("focus", i === this.f)); }
   bg() { return { src: this.v.backdrop || this.v.img || null, opacity: 0.45 }; }
@@ -2408,6 +2455,7 @@ class VideoPage extends Page {
     if (k === "ok") {
       if (!Emby.connected) { toast("sign in to emby in settings to play this"); return true; }
       const b = this.btnEls[this.f];
+      if (b.dataset.id === "cast") { go(new CastPage(this.v)); return true; }
       if (b.dataset.id === "delete") { // press twice: the first press asks
         if (!this.sure) { this.sure = true; b.textContent = "press enter again to delete"; b.classList.add("danger"); return true; }
         Emby.deleteItem(this.v.id).then(() => { DVR.touch(); toast(`deleted ${this.v.title}`); if (top() === this) back(); }, e => toast(DVR.why(e, "delete it")));
@@ -2418,6 +2466,30 @@ class VideoPage extends Page {
       return true;
     }
     return false;
+  }
+}
+
+// Cast & crew: round photos with the name and the part they played (or their job), the actors first.
+// Same giant title as the info screen, so going here and back just zooms the rest in and out.
+class CastPage extends Page {
+  constructor(v) { super(); this.v = v; this.f = 0; }
+  get titleKey() { return this.v.rec ? "recordings" : this.v.type === "Episode" ? "tv shows" : "movies"; }
+  render() {
+    const v = this.v, ep = v.type === "Episode" && v.seriesName;
+    const r = el("div", "video-page cast-page");
+    const sub = ep ? `cast & crew · s${v.season || "?"} e${v.episode || "?"} · ${v.title}` : "cast & crew";
+    r.append(el("div", "sec-title z", esc(this.titleKey)),
+      el("div", "alb-head zs", `<div class="an">${esc(ep ? v.seriesName : v.title)}</div><div class="sc">${esc(sub)}</div>`));
+    const body = el("div", "cast-body");
+    this.grid = Grid({ items: this.v.people || [], cols: 7, w: 220, h: 306, gap: 30, height: 650, cell: CELL.person, focus: this.f });
+    body.append(this.grid.el); r.append(body);
+    return r;
+  }
+  bg() { return { src: this.v.backdrop || this.v.img || null, opacity: 0.3 }; }
+  key(k) {
+    if (k === "up" || k === "down") { this.grid.move(k === "up" ? -1 : 1); this.f = this.grid.index; return true; }
+    if (k === "left" || k === "right") { this.grid.moveX(k === "left" ? -1 : 1); this.f = this.grid.index; return true; }
+    return k === "ok";
   }
 }
 
@@ -5581,6 +5653,7 @@ const RPC = {
     return { ok: true };
   },
   "Guide.Refresh": () => GuideFeed.push(),
+  "Guide.ShowResults": p => showGuideResults(p), // the assistant's answer to "is football on?", as a list
   // picture in picture, same answers as the old hub
   // picture in picture (up to four pictures), same answers as the old hub
   "Player.AddDualChannel": async p => {
@@ -5689,7 +5762,7 @@ const GuideFeed = {
   async push() {
     if (location.protocol === "file:" || !Emby.connected) return { count: 0 };
     const chans = await Emby.channels();
-    const from = Date.now() - HOUR, to = Date.now() + 12 * HOUR, programs = [];
+    const from = Date.now() - HOUR, to = Date.now() + 24 * HOUR, programs = []; // a day ahead: "is the game on tonight" in the morning
     for (let i = 0; i < chans.length; i += 60) {
       const batch = await Emby.programs(chans.slice(i, i + 60).map(c => c.id), from, to).catch(() => []);
       batch.forEach(p => programs.push({

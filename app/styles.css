@@ -219,6 +219,10 @@ html, body {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color 140ms;
 }
 .tile.artist.focus .nm { color: var(--fg); }
+/* cast & crew */
+.cast-body { position: absolute; left: 100px; right: 96px; top: 320px; }
+.tile.artist .rl { margin-top: 4px; text-align: center; font-size: 20px; line-height: 1.2; color: var(--dim); opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile.artist.focus .rl { opacity: 1; }
 .tile img { object-fit: cover; }
 .tile .noimg { position: absolute; inset: 0; padding: 18px; font-size: 30px; line-height: 1.2; color: var(--dim); overflow: hidden; }
 .qp-tile img { object-fit: cover; }

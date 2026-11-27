@@ -183,6 +183,107 @@ def spoken_time(ms):
     return f"{h12} {dt.strftime('%p').lower()}" if dt.minute == 0 else f"{h12}:{dt.strftime('%M')} {dt.strftime('%p').lower()}"
 
 
+GUIDE_SPORTS = ("football", "basketball", "hockey", "baseball", "soccer", "golf", "tennis", "auto racing",
+                "boxing", "wrestling", "mixed martial arts", "volleyball", "softball", "lacrosse", "rugby",
+                "bowling", "swimming", "track/field", "gymnastics", "skiing", "figure skating", "cricket",
+                "sports event", "sports non-event", "motorsports", "horse racing", "poker", "billiards")
+GUIDE_TEAM_SPORTS = ("football", "basketball", "hockey", "baseball", "soccer")
+GUIDE_NOT_GAMES = ("sports talk", "news", "talk", "documentary", "newsmagazine")  # shows about games
+
+
+def guide_word_re(term):
+    """A whole-word pattern: 'bears' finds 'Chicago Bears at Detroit Lions' but not 'Bearsville'."""
+    t = re.sub(r"\\ ", r"\\s+", re.escape(" ".join(str(term).strip().lower().split())))
+    return re.compile(r"(?<![a-z0-9])" + t + r"(?:'?s)?(?![a-z0-9])", re.I)
+
+
+def guide_window(when, now_ms):
+    """(from, to) in ms for now · soon · today · tonight · tomorrow · upcoming (everything to come)."""
+    from datetime import timedelta
+    now = datetime.fromtimestamp(now_ms / 1000)
+    day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    ms = lambda d: int(d.timestamp() * 1000)
+    if when == "now":
+        return now_ms, now_ms + 1
+    if when == "soon":
+        return now_ms, now_ms + 2 * 3600 * 1000
+    if when == "today":
+        return now_ms, ms(day + timedelta(days=1))
+    if when == "tonight":
+        return max(now_ms, ms(day.replace(hour=17))), ms(day + timedelta(days=1, hours=2))
+    if when == "tomorrow":
+        return ms(day + timedelta(days=1, hours=5)), ms(day + timedelta(days=2, hours=2))
+    return now_ms, now_ms + 7 * 24 * 3600 * 1000
+
+
+def guide_channel_pick(channels, q):
+    """The channel a spoken name means: its number or exact name first, then the closest name."""
+    qn = re.sub(r"[^a-z0-9]+", "", str(q or "").lower())
+    if not qn:
+        return []
+    cn = lambda c: re.sub(r"[^a-z0-9]+", "", str(c.get("Name") or "").lower())
+    num = [c for c in channels if str(c.get("ChannelNumber") or "").strip() == str(q).strip()]
+    if num:
+        return num[:1]
+    tests = (lambda n: n == qn, lambda n: n in (qn + "channel", qn + "network", qn + "tv", "the" + qn + "channel"),
+             lambda n: n.startswith(qn), lambda n: qn in n)  # "hallmark": Hallmark Channel, not Hallmark Mystery
+    for test in tests:
+        hits = sorted([c for c in channels if test(cn(c))], key=lambda c: len(cn(c)))
+        if hits:
+            return hits[:1]
+    return []
+
+
+def guide_score(prog, q):
+    """How well a listing fits the question (None: it doesn't). Every part asked for has to fit:
+    the show's name, the teams, and the kind of show (a category, or a word that says it)."""
+    name = str(prog.get("Name") or "").strip()
+    title = " ".join(str(x) for x in (name, prog.get("EpisodeTitle")) if x)
+    over = str(prog.get("Overview") or "")
+    genres = [str(g).lower() for g in (prog.get("Genres") or [])]
+    is_movie = "movie" in genres
+    score = 0
+    if q["movie"] and not is_movie:
+        return None
+    if q["noMovie"] and is_movie:
+        return None
+    if q["titles"]:
+        if not any(t.search(title) for t in q["titles"]):
+            return None
+        bare = re.sub(r"[^a-z0-9' ]+", " ", name.lower()).strip()  # "Jeopardy!" is the show "jeopardy"
+        score += 6 + (3 if any(t.search(name) for t in q["titles"]) else 0) + (3 if any(t.fullmatch(bare) for t in q["titles"]) else 0)
+    if q["teams"]:
+        hit = [t for t in q["teams"] if t.search(title)]
+        if not hit and not any(t.search(over) for t in q["teams"]):
+            return None
+        score += 5 * len(hit) + 1
+    if q["genres"] or q["keywords"]:
+        g_hit = any(g in genres for g in q["genres"])
+        k_title = any(k.search(title) for k in q["keywords"])
+        k_over = any(k.search(over) for k in q["keywords"])
+        if not (g_hit or k_title or k_over):
+            return None
+        score += (3 if g_hit else 0) + (2 if k_title else 0) + (1 if k_over else 0)
+    if q["gamesOnly"]:
+        if not any(g in GUIDE_SPORTS for g in genres) and not q["teams"]:
+            return None
+        if any(g in GUIDE_NOT_GAMES for g in genres):
+            score -= 6  # pre-game and talk shows: only when nothing better
+        if re.search(r"(?<![a-z])(?:vs?\.?|at)(?![a-z])", str(prog.get("EpisodeTitle") or ""), re.I):
+            score += 4  # "Chicago Bears at Detroit Lions": a real game
+    return score
+
+
+def guide_query(params):
+    words = lambda key: [guide_word_re(t) for t in (params.get(key) or []) if str(t).strip()]
+    return {
+        "titles": words("titles"), "teams": words("teams"), "keywords": words("keywords"),
+        "genres": [str(g).strip().lower() for g in (params.get("genres") or []) if str(g).strip()],
+        "movie": bool(params.get("movie") or params.get("requireMovie")), "noMovie": bool(params.get("noMovie")),
+        "gamesOnly": bool(params.get("gamesOnly")),
+    }
+
+
 def match_label(prog, ch, when):
     name = str(ch.get("Name") or "TV").strip()
     pname = str(prog.get("Name") or "").strip()
@@ -195,42 +296,13 @@ def match_label(prog, ch, when):
     return label
 
 
-def program_matches(prog, ch, params, now_ms):
-    start, end = parse_ms(prog.get("StartDate")), parse_ms(prog.get("EndDate"))
-    if start is None:
-        return False
-    end = end or start + 30 * 60 * 1000
-    when = str(params.get("when") or "now")
-    if when == "now" and not (start <= now_ms < end):
-        return False
-    if when == "later" and not start > now_ms:
-        return False
-    if when == "tonight":
-        midnight = datetime.fromtimestamp(now_ms / 1000).replace(hour=23, minute=59, second=59)
-        if not (now_ms < start <= int(midnight.timestamp() * 1000)):
-            return False
-    channel_q = str(params.get("channelQuery") or params.get("channel_query") or "").strip().lower()
-    if channel_q and channel_q not in f"{ch.get('ChannelNumber') or ''} {ch.get('Name') or ''}".lower():
-        return False
-    genres = " ".join(str(g) for g in (prog.get("Genres") or [])).lower()
-    hay = " ".join(str(x) for x in (prog.get("Name"), prog.get("EpisodeTitle"), prog.get("Overview"), genres) if x).lower()
-    for g in params.get("genres") or []:
-        g = str(g).lower()
-        if g and g not in genres and g not in hay:
-            return False
-    if params.get("requireMovie") and "movie" not in genres and "movie" not in hay:
-        return False
-    terms = [str(t).lower() for t in (params.get("terms") or []) if str(t).strip()]
-    if terms:
-        mode = str(params.get("termsMatch") or params.get("terms_match") or "all").lower()
-        if mode == "any" and not any(t in hay for t in terms):
-            return False
-        if mode != "any" and not all(t in hay for t in terms):
-            return False
-    return True
-
-
 def guide_search(params):
+    """Listings that fit a question, best first. The voice assistant turns what was said into:
+      titles   show or movie names ("jeopardy")         teams    teams or people ("bears")
+      genres   guide categories ("football", "movie")   keywords words that say the kind of show
+      movie / noMovie / gamesOnly (real games, not the shows about them)
+      channel  a channel's name or number (then: what's on it, in time order)
+      when     now · soon · today · tonight · tomorrow · upcoming (the default)"""
     params = dict(params or {})
     with GUIDE_LOCK:
         have = bool(GUIDE["programs"])
@@ -238,7 +310,7 @@ def guide_search(params):
     # stale, empty or asked to refresh: ask the open app to send a fresh copy first
     if (params.get("refresh") or not have or not fresh) and BRIDGE.connected():
         try:
-            BRIDGE.call("Guide.Refresh", {}, timeout=15.0)
+            BRIDGE.call("Guide.Refresh", {}, timeout=25.0)
         except RuntimeError as e:
             if not have:
                 return {"error": f"couldn't load the guide: {e}", "matches": [], "matchCount": 0}
@@ -247,31 +319,65 @@ def guide_search(params):
     if not programs:
         return {"error": "No guide yet — open the media center and sign in to Emby so the guide loads.", "matches": [], "matchCount": 0}
     now_ms = int(time.time() * 1000)
-    when = str(params.get("when") or "now")
+    when = str(params.get("when") or "upcoming")
+    lo, hi = guide_window(when, now_ms)
     by_id = {str(c.get("Id")): c for c in channels}
-    seen, matches = set(), []
+    chan_q = str(params.get("channel") or params.get("channelQuery") or params.get("channel_query") or "").strip()
+    picked = guide_channel_pick(channels, chan_q) if chan_q else []
+    if chan_q and not picked:
+        return {"ok": True, "matches": [], "matchCount": 0, "channelFound": False, "programCount": len(programs)}
+    only = {str(c.get("Id")) for c in picked}
+    q = guide_query(params)
+    if not only and not any((q["titles"], q["teams"], q["genres"], q["keywords"], q["movie"], q["gamesOnly"])):
+        return {"error": "nothing to look for", "matches": [], "matchCount": 0}
+    seen, found = set(), []
     for prog in programs:
-        ch = by_id.get(str(prog.get("ChannelId")), {})
-        if not isinstance(prog, dict) or not program_matches(prog, ch, params, now_ms):
+        if not isinstance(prog, dict):
             continue
-        key = f"{prog.get('Id')}|{prog.get('StartDate')}"
+        cid = str(prog.get("ChannelId"))
+        if only and cid not in only:
+            continue
+        start, end = parse_ms(prog.get("StartDate")), parse_ms(prog.get("EndDate"))
+        if start is None:
+            continue
+        end = end or start + 30 * 60 * 1000
+        if not (start < hi and end > lo):
+            continue
+        score = guide_score(prog, q) if not only or any(q.values()) else 0
+        if score is None:
+            continue
+        key = f"{cid}|{prog.get('Name')}|{start}"
         if key in seen:
             continue
         seen.add(key)
+        found.append((score, start, end, prog, by_id.get(cid, {})))
+    if only:
+        found.sort(key=lambda x: x[1])  # a channel: in time order
+    else:  # the best fits, then what's on now, then the soonest
+        found.sort(key=lambda x: (-x[0], 0 if x[1] <= now_ms else 1, x[1]))
+    matches = []
+    for score, start, end, prog, ch in found:
+        genres = list(prog.get("Genres") or [])
         matches.append({
             "channelId": prog.get("ChannelId"), "channelName": ch.get("Name") or "TV",
             "channelNumber": str(ch.get("ChannelNumber") or ""), "name": prog.get("Name") or "",
             "episodeTitle": prog.get("EpisodeTitle") or "", "startDate": prog.get("StartDate"),
-            "endDate": prog.get("EndDate"), "label": match_label(prog, ch, when),
+            "endDate": prog.get("EndDate"), "startMs": start, "endMs": end, "onNow": start <= now_ms < end,
+            "genres": genres, "isMovie": "Movie" in genres, "score": score,
+            "overview": str(prog.get("Overview") or "")[:300],
+            "label": match_label(prog, ch, "now" if start <= now_ms else "later"),
         })
-    matches.sort(key=lambda m: parse_ms(m["startDate"]) or 0)
+    total = len(matches)
     limit = int(params.get("limit") or 12)
     if limit > 0:
         matches = matches[:limit]
-    return {
-        "ok": True, "fresh": now_ms - saved_at < GUIDE_FRESH_SEC * 1000,
-        "matchCount": len(matches), "matches": matches, "programCount": len(programs),
+    out = {
+        "ok": True, "fresh": now_ms - saved_at < GUIDE_FRESH_SEC * 1000, "when": when,
+        "matchCount": total, "matches": matches, "programCount": len(programs),
     }
+    if picked:
+        out["channel"] = {"name": picked[0].get("Name"), "number": str(picked[0].get("ChannelNumber") or "")}
+    return out
 
 
 # ---------------------------------------------------------------- artist pictures (radio)

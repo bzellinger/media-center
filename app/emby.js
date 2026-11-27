@@ -473,6 +473,25 @@ window.Emby = (() => {
     // tv
     shows: async () => (await items({ IncludeItemTypes: "Series", SortBy: "SortName" })).map(mapVideo),
     newEpisodes: async (n = 30) => list(await req(`/Users/${s.userId}/Items/Latest?` + Q({ IncludeItemTypes: "Episode", Limit: n, Fields: FIELDS, EnableUserData: true, GroupItems: true }))).map(mapVideo),
+    // cast & crew of a movie or episode (an episode: its guest stars, then the show's regular cast)
+    people: async v => {
+      const get = id => req(`/Users/${s.userId}/Items/${id}?` + Q({ Fields: "People" })).then(i => (i && i.People) || [], () => []);
+      const lists = await Promise.all([get(v.id), v.type === "Episode" && v.seriesId ? get(v.seriesId) : []]);
+      const JOB = { Director: "director", Writer: "writer", Producer: "producer", Composer: "music", GuestStar: "guest star" };
+      const cast = [], crew = [], byKey = new Map();
+      for (const p of lists.flat()) {
+        if (!p || !p.Name) continue;
+        const acting = p.Type === "Actor" || p.Type === "GuestStar";
+        const role = acting ? (p.Role || (p.Type === "GuestStar" ? "guest star" : "")) : (JOB[p.Type] || lowerWords(p.Type || ""));
+        const key = (acting ? "c|" : "w|") + (p.Id || p.Name);
+        const had = byKey.get(key);
+        if (had) { if (role && !had.roles.includes(role)) had.roles.push(role); continue; }
+        const person = { id: p.Id, name: p.Name, roles: role ? [role] : [], img: img(p.Id, p.PrimaryImageTag, "Primary", 400), hue: hashHue(p.Name) };
+        byKey.set(key, person);
+        (acting ? cast : crew).push(person);
+      }
+      return [...cast, ...crew].map(p => ({ ...p, role: p.roles.join(" · ") }));
+    },
     seasons: async id => list(await req(`/Shows/${id}/Seasons?` + Q({ UserId: s.userId, Fields: FIELDS }))).map(i => ({ id: i.Id, name: (i.Name || "").toLowerCase(), index: i.IndexNumber })),
     // the episode after this one (across seasons), or null at the end of the show
     nextEpisode: async ep => list(await req(`/Shows/${ep.seriesId}/Episodes?` + Q({ UserId: s.userId, StartItemId: ep.id, Limit: 2, Fields: FIELDS, EnableUserData: true })))
