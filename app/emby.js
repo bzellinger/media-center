@@ -492,6 +492,17 @@ window.Emby = (() => {
       }
       return [...cast, ...crew].map(p => ({ ...p, role: p.roles.join(" · ") }));
     },
+    // everything in the library a person is in: movies and shows, newest first
+    // (someone who was only a guest star on a show brings that show in through the episode)
+    personTitles: async personId => {
+      const [main, eps] = await Promise.all([
+        items({ PersonIds: personId, IncludeItemTypes: "Movie,Series", SortBy: "ProductionYear,SortName", SortOrder: "Descending" }),
+        items({ PersonIds: personId, IncludeItemTypes: "Episode", SortBy: "PremiereDate", SortOrder: "Descending", Limit: 200 }).catch(() => []),
+      ]);
+      const out = main.map(mapVideo), shows = new Set(out.filter(x => x.type === "Series").map(x => x.id));
+      for (const e of eps.map(mapVideo)) if (e.seriesId && !shows.has(e.seriesId)) { shows.add(e.seriesId); out.push(e); }
+      return out;
+    },
     seasons: async id => list(await req(`/Shows/${id}/Seasons?` + Q({ UserId: s.userId, Fields: FIELDS }))).map(i => ({ id: i.Id, name: (i.Name || "").toLowerCase(), index: i.IndexNumber })),
     // the episode after this one (across seasons), or null at the end of the show
     nextEpisode: async ep => list(await req(`/Shows/${ep.seriesId}/Episodes?` + Q({ UserId: s.userId, StartItemId: ep.id, Limit: 2, Fields: FIELDS, EnableUserData: true })))

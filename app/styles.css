@@ -822,6 +822,8 @@ html.nopointer, html.nopointer * { cursor: none !important; }
 .dimfocus .tile.focus, .dimfocus .tile.focus .pic, .dimfocus .tile.focus .circ { outline-color: transparent !important; box-shadow: none !important; }
 /* room around a grid so the border and glow of an edge cover aren't cut off (the covers stay aligned) */
 .list.grid { left: -26px; right: -26px; top: -26px; padding: 26px 26px 0; box-sizing: content-box; }
+/* a grid under a page's name: a little lower, so the picked cover (drawn bigger) doesn't cover the line under the name */
+.page-body > .list.grid { top: -6px; }
 /* picture in picture: same border weight, same glow */
 .mv-frame { border-width: var(--ring); box-shadow: var(--glow); }
 /* text lists: unpicked lines a step dimmer so the bright one stands out */

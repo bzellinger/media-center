@@ -2489,7 +2489,19 @@ class CastPage extends Page {
   key(k) {
     if (k === "up" || k === "down") { this.grid.move(k === "up" ? -1 : 1); this.f = this.grid.index; return true; }
     if (k === "left" || k === "right") { this.grid.moveX(k === "left" ? -1 : 1); this.f = this.grid.index; return true; }
-    return k === "ok";
+    if (k === "ok") { // everything else of theirs in the library (not the one we came from)
+      const p = this.grid.item;
+      if (!p || !p.id) return true;
+      const from = this.v.type === "Episode" ? this.v.seriesId : this.v.id;
+      go(new ListPage({
+        section: this.titleKey, title: p.name,
+        sub: d => d.length ? `${d.length} more in your library` : "nothing else in your library",
+        load: () => Emby.personTitles(p.id).then(l => l.filter(x => x.id !== from && x.id !== this.v.id)),
+        view: posterGrid, open: openItem,
+      }));
+      return true;
+    }
+    return false;
   }
 }
 
