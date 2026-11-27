@@ -517,12 +517,23 @@ window.Emby = (() => {
       SortBy: "StartDate", Fields: PROGRAM_FIELDS, EnableImages: true, ImageTypeLimit: 1, EnableUserData: false,
     }))).map(mapProgram),
     // tv guide → movies / shows / sports: what's airing on every channel over the next days (shows: one per series)
-    upcoming: async (kind, days) => list(await req("/LiveTv/Programs?" + Q({
-      UserId: s.userId, MinEndDate: new Date().toISOString(), MaxStartDate: new Date(Date.now() + days * 864e5).toISOString(),
-      SortBy: "StartDate", Fields: PROGRAM_FIELDS, EnableImages: true, ImageTypeLimit: 1, EnableUserData: false, Limit: 8000,
-      ...(kind === "movie" ? { IsMovie: true } : kind === "sports" ? { IsSports: true }
-        : { IsSeries: true, IsMovie: false, IsSports: false, GroupProgramsBySeries: true }),
-    }))).map(mapProgram),
+    // every airing coming up, a page at a time (the app keeps one per show or movie).
+    // (Not Emby's GroupProgramsBySeries: its one-per-show results leave out the time, channel and story.)
+    upcoming: async (kind, days) => {
+      const base = {
+        UserId: s.userId, MinEndDate: new Date().toISOString(), MaxStartDate: new Date(Date.now() + days * 864e5).toISOString(),
+        SortBy: "StartDate", Fields: PROGRAM_FIELDS, EnableImages: true, ImageTypeLimit: 1, EnableUserData: false,
+        ...(kind === "movie" ? { IsMovie: true } : kind === "sports" ? { IsSports: true } : { IsSeries: true, IsMovie: false, IsSports: false }),
+      };
+      const out = [], PAGE = 8000;
+      for (let at = 0; at < 48000; at += PAGE) {
+        const r = await req("/LiveTv/Programs?" + Q({ ...base, StartIndex: at, Limit: PAGE }));
+        const got = list(r);
+        out.push(...got);
+        if (got.length < PAGE || out.length >= (r.TotalRecordCount || 0)) break;
+      }
+      return out.map(mapProgram);
+    },
     liveStream, stopStream, shieldCaps: () => SHIELD && SHIELD.caps,
     videoStream, report, artistInfo,
     // ----- being a remote-controllable player (Emby's phone app, the web page, plugins like ComSkipper) -----

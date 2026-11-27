@@ -38,15 +38,15 @@ window.Art = (() => {
     return url;
   }
 
-  function photo(name, h) {
+  function photo(name, h, sat = 1) { // sat: 1 = full colour, lower for greyer glows
     const key = "ph:" + name;
     if (cache.has(key)) return cache.get(key);
     const W = 1600, H = 900, r = seeded(name), [c, x] = canvas(W, H);
-    x.fillStyle = `hsl(${h},40%,8%)`; x.fillRect(0, 0, W, H);
+    x.fillStyle = `hsl(${h},${40 * sat}%,8%)`; x.fillRect(0, 0, W, H);
     x.filter = "blur(70px)";
     for (let i = 0; i < 10; i++) {
       x.globalAlpha = 0.35 + r() * 0.5;
-      x.fillStyle = `hsl(${hue(h + r() * 90 - 45)},${55 + r() * 35}%,${22 + r() * 40}%)`;
+      x.fillStyle = `hsl(${hue(h + r() * 90 - 45)},${(55 + r() * 35) * sat}%,${22 + r() * 40}%)`;
       x.beginPath();
       x.ellipse(r() * W, r() * H, 140 + r() * 420, 90 + r() * 300, r() * 3, 0, 7);
       x.fill();
@@ -83,13 +83,49 @@ window.Art = (() => {
     cache.set(key, url);
     return url;
   }
+  // Zune HD style: one strong flat colour, darker toward the top, crossed by soft diagonal light streaks
+  function streaks(name, top, bottom, light) {
+    const key = "wall:" + name;
+    if (cache.has(key)) return cache.get(key);
+    const W = 1600, H = 900, r = seeded(name), [c, x] = canvas(W, H);
+    const g = x.createLinearGradient(0, 0, W * 0.4, H);
+    g.addColorStop(0, top); g.addColorStop(1, bottom);
+    x.fillStyle = g; x.fillRect(0, 0, W, H);
+    x.filter = "blur(28px)";
+    x.save(); x.translate(W / 2, H / 2); x.rotate(-0.42);
+    for (let i = 0; i < 6; i++) {
+      x.globalAlpha = 0.1 + r() * 0.22;
+      x.fillStyle = light;
+      x.fillRect(-W, -H * 0.6 + r() * H * 1.2, W * 2, 14 + r() * 90);
+    }
+    x.restore();
+    x.filter = "blur(120px)"; x.globalAlpha = 0.35; x.fillStyle = light; // a broad glow low on the right
+    x.beginPath(); x.ellipse(W * 0.78, H * 0.92, 520, 220, -0.3, 0, 7); x.fill();
+    x.filter = "none"; x.globalAlpha = 1;
+    const url = c.toDataURL("image/jpeg", 0.85);
+    cache.set(key, url);
+    return url;
+  }
   const WALLS = {
     zune: () => photo("home-wallpaper", 322),
     black: () => solid("black", "#000"),
     "media center": mediaCenter,
+    // soft colour glows
     sunset: () => photo("wall-sunset", 18),
     forest: () => photo("wall-forest", 140),
     midnight: () => photo("wall-midnight", 245),
+    ocean: () => photo("wall-ocean", 188),
+    ruby: () => photo("wall-ruby", 352),
+    violet: () => photo("wall-violet", 275),
+    gold: () => photo("wall-gold", 42),
+    rose: () => photo("wall-rose", 332),
+    slate: () => photo("wall-slate", 215, 0.25),
+    // classic zune hd looks
+    "zune orange": () => streaks("zune-orange", "#7a2600", "#ff7a00", "#ffd08a"),
+    "zune pink": () => streaks("zune-pink", "#5c0036", "#ec008c", "#ff9ad6"),
+    "zune blue": () => streaks("zune-blue", "#00264d", "#0a7ad6", "#9fd8ff"),
+    "zune green": () => streaks("zune-green", "#0d3300", "#4caf1a", "#d4ff8a"),
+    "zune purple": () => streaks("zune-purple", "#24004a", "#7b2fd0", "#d7b0ff"),
   };
   let wall = "zune";
 

@@ -800,14 +800,17 @@ ROW.video = v => el("div", "r-video", `${v.img ? imgTag(v.img, "pt") : `<div cla
   esc([v.type === "Episode" ? `s${v.season || "?"} e${v.episode || "?"} · ${v.title}` : v.year, v.runtime ? fmtLong(v.runtime) : "", v.rating, v.score ? v.score + " ★" : ""].filter(Boolean).join(" · "))}</div></div>`);
 
 // tv guide → movies / shows / sports: one upcoming airing (the soonest), with when and where it's on
+// "today" · "tomorrow" · "thu" · "dec 12": the day something airs
+function airDay(t) {
+  const d = new Date(t), today = new Date(); today.setHours(0, 0, 0, 0);
+  const days = Math.floor((d - today) / 864e5);
+  return days <= 0 ? "today" : days === 1 ? "tomorrow" : days < 7 ? d.toLocaleDateString([], { weekday: "short" }).toLowerCase()
+    : d.toLocaleDateString([], { month: "short", day: "numeric" }).toLowerCase();
+}
 function airText(p) {
   const now = Date.now();
   if (p.start <= now && p.end > now) return "on now";
-  const d = new Date(p.start), today = new Date(); today.setHours(0, 0, 0, 0);
-  const days = Math.floor((d - today) / 864e5);
-  const day = days <= 0 ? "today" : days === 1 ? "tomorrow" : days < 7 ? d.toLocaleDateString([], { weekday: "short" }).toLowerCase()
-    : d.toLocaleDateString([], { month: "short", day: "numeric" }).toLowerCase();
-  return `${day} ${clock12(p.start)}`;
+  return `${airDay(p.start)} ${clock12(p.start)}`;
 }
 const progWhere = p => [airText(p), p.ch && p.ch.name, p.airings > 1 ? `+${p.airings - 1} more` : ""].filter(Boolean).join(" · ");
 const progRec = p => !!(p.timerId || p.anyRec || p.seriesTimerId);
@@ -2784,11 +2787,12 @@ class ProgramPage extends Page {
     const onNow = p && p.start <= now && p.end > now;
     const watching = Live.isOn(ch);
     const when = !p ? "" : onNow ? `on now · ${fmtLong((p.end - now) / 1000)} left`
-      : p.start > now ? `starts in ${fmtLong((p.start - now) / 1000)}` : "already aired";
+      : p.start > now ? (p.start - now < 3 * HOUR ? `starts in ${fmtLong((p.start - now) / 1000)}` : "") : "already aired";
+    const later = p && !onNow && p.start - now >= 3 * HOUR && airDay(p.start) !== "today"; // further off: say the day
     const r = el("div", "program-page");
     r.append(el("div", "sec-title z", "tv guide"),
       el("div", "alb-head zs", `<div class="an">${esc(p ? progTitle(p) : ch.name)}</div><div class="sc">${
-        [esc(guideCh(ch)), p ? `${clock12(p.start)} – ${clock12(p.end)}` : "", when, watching ? "watching" : ""].filter(Boolean).join(" · ")}</div>`));
+        [esc(guideCh(ch)), p ? `${later ? airDay(p.start) + " " : ""}${clock12(p.start)} – ${clock12(p.end)}` : "", when, watching ? "watching" : ""].filter(Boolean).join(" · ")}</div>`));
     // Emby's guide pictures are usually portrait posters; the frame takes the picture's own shape
     // (portrait unless Emby says it's wide), and corrects itself once the picture has loaded
     r.classList.toggle("portrait", !!(p && p.img && !(p.aspect > 1)));
@@ -3296,7 +3300,7 @@ function playStream(v, info) {
    windows forced Emby to convert channels it otherwise just passes along (H.264 from Frndly / Philo),
    which made a third and fourth picture overload it; Edge shrinks the pictures itself instead. */
 const PIP_LIGHT = false; // (the reduced-stream machinery stays, switched off)
-// Two looks (settings → playback → picture in picture):
+// Two looks, picked each time from the pip button (the last one picked is offered first, and voice uses it):
 // "four": one big picture on the left (1440×810) + up to three small ones stacked on the right (480×270)
 // "two":  the old Zune hub's side by side — the channel you were watching on the right half, the added one on the left
 const SLOTS = {
@@ -3391,6 +3395,37 @@ const Dual = {
   },
   status(p, text) { if (p === MAIN) Live.setStatus(text); else p.status = text; this.overlay(); },
 
+  // ----- choosing the look (the pip button, before picture in picture starts) -----
+  asking: false,
+  askLook() {
+    if (!Live.active || !this.page()) return false;
+    if (this.chans.length < 2) { toast("there's only one channel"); return false; }
+    const box = this.box(); if (!box) return false;
+    const looks = [["four", "4", "four pictures", "one big · three small"], ["two", "2", "two pictures", "side by side"]];
+    this.asking = true;
+    this.list = List({ items: looks, itemH: 96, height: 192, focus: Prefs.get("pip") === "two" ? 1 : 0,
+      row: l => el("div", "r-dual", `<span class="n">${l[1]}</span><div class="tx"><div class="t1 caps">${l[2]}</div><div class="t2 sc">${l[3]}</div></div>`) });
+    this.list.looks = looks;
+    const pickEl = el("div", "lv-pick");
+    pickEl.append(el("div", "lv-pick-h sc", "picture in picture"), this.list.el);
+    box.querySelector(".lv-pick")?.remove();
+    box.append(pickEl);
+    slideIn([pickEl], -1, { dist: 120, dur: 420 });
+    this.hint("↑ ↓ choose · enter picks it · back cancels");
+    return true;
+  },
+  lookKey(k) {
+    if (k === "up" || k === "down") this.list.move(k === "up" ? -1 : 1);
+    else if (k === "ok") {
+      Prefs.set("pip", this.list.looks[this.list.index][0]);
+      this.asking = false;
+      this.box()?.querySelector(".lv-pick")?.remove(); // the channel list slides in in its place
+      this.pick();
+    }
+    else if (k === "back") { this.asking = false; this.closePick(); }
+    return true;
+  },
+
   // ----- adding a channel -----
   // the picture shrinks into the big spot and the channel list opens over it
   pick(focus) {
@@ -3430,6 +3465,28 @@ const Dual = {
     box.querySelector(".lv-pick")?.remove();
     box.append(pickEl);
     slideIn([pickEl], -1, { dist: 120, dur: 420 });
+    this.fillPick(pickEl);
+  },
+  // the guide only has listings for the channels it has shown, so fetch what's on for the rest and fill in their lines
+  fillPick(pickEl) {
+    const g = Live.guide; if (!g || !g.progs || !Emby.connected) return;
+    const now = Date.now(), rows = pickEl.querySelectorAll(".list-inner > .row");
+    const need = this.chans.filter(ch => !g.progs.has(ch.id));
+    for (let i = 0; i < need.length; i += 40) {
+      const ids = need.slice(i, i + 40).map(ch => ch.id);
+      ids.forEach(id => g.progs.set(id, []));
+      const from = g.T0 != null ? g.T0 : now - 4 * HOUR;
+      Emby.programs(ids, from, from + G.ahead).catch(() => []).then(list => {
+        list.forEach(p => { const ps = g.progs.get(p.channelId); if (ps) ps.push(p); });
+        ids.forEach(id => g.progs.get(id).sort((a, b) => a.start - b.start));
+        if (!pickEl.isConnected) return;
+        this.chans.forEach((ch, k) => {
+          if (!ids.includes(ch.id) || this.showing(k) >= 0) return;
+          const p = g.progAt(ch, now), t2 = rows[k] && rows[k].querySelector(".t2");
+          if (t2 && p && p.start <= now && p.end > now) t2.textContent = p.title;
+        });
+      });
+    }
   },
   closePick() {
     const pickEl = this.box()?.querySelector(".lv-pick");
@@ -3562,6 +3619,7 @@ const Dual = {
   // straight away, no animation (tv stopped, or the player screen left): keep the big one
   close() {
     this.dropPending();
+    this.asking = false;
     if (!this.on) { if (MAIN.light && Live.active) setTimeout(() => this.requality(MAIN, false), 300); return; }
     for (const p of this.smalls) { p.gen++; if (p.hls) p.hls.destroy(); if (p.stream) Emby.stopStream(p.stream); p.video.pause(); p.video.remove(); }
     this.smalls = [];
@@ -3584,6 +3642,7 @@ const Dual = {
     if (this.f < n) this.setAudio(this.f); else this.overlay(); // the "+ add" spot has no sound of its own
   },
   key(k) {
+    if (this.asking) return this.lookKey(k);
     if (this.mode === "pick") {
       if (k === "up" || k === "down") this.list.move(k === "up" ? -1 : 1);
       else if (k === "ok") this.choose(this.list.index);
@@ -3955,7 +4014,7 @@ class LivePage extends Page {
       const open = this.q(".lv-osd").classList.toggle("info");
       if (open) clearTimeout(this.osdTimer); else this.arm("osdHide");
     }
-    else if (id === "dual") { this.setMode("hidden"); Dual.pick(); return; }
+    else if (id === "dual") { this.setMode("hidden"); if (Dual.on) Dual.pick(); else Dual.askLook(); return; }
     else if (id === "cc") { CC.set(!CC.on); toast(CC.on ? "captions on" : "captions off"); }
     else if (id === "rec") {
       const p = this.current();
@@ -3992,7 +4051,7 @@ class LivePage extends Page {
     return false;
   }
   key(k) {
-    if (Dual.on) return Dual.key(k); // picture in picture has its own keys
+    if (Dual.on || Dual.asking) return Dual.key(k); // picture in picture has its own keys
     if (k === "back") {
       if (this.infoOpen()) { this.q(".lv-osd").classList.remove("info"); this.arm("osdHide"); return true; } // Back folds the info away
       if (this.mode === "controls") { this.setMode("hidden"); return true; } // first Back just closes the controls
@@ -4552,7 +4611,6 @@ const SETTINGS_TABS = [
       { label: "skip ahead (→)", values: () => [10, 15, 30, 60].map(n => [n, `${n} seconds`]), get: () => Number(Prefs.get("skipFwd")), set: v => Prefs.set("skipFwd", v) },
       { label: "next episode plays", values: () => [[0, "off"], [5, "after 5 seconds"], [10, "after 10 seconds"], [20, "after 20 seconds"]], get: () => Number(Prefs.get("nextEp")), set: v => Prefs.set("nextEp", v) },
       { label: "sleep timer", values: () => Sleep.values(), get: () => Sleep.mins, set: v => Sleep.set(v) },
-      { label: "picture in picture", values: () => [["four", "one big + three small"], ["two", "side by side (2 channels)"]], get: () => Prefs.get("pip"), set: v => Prefs.set("pip", v) },
       { label: "music volume", values: () => [100, 80, 60, 40].map(n => [n, `${n}%`]), get: () => Prefs.get("musicVol"), set: v => { Prefs.set("musicVol", v); Volume.apply(); } },
       ...(NATIVE ? [{ // the Shield switches the TV to the film's frame rate (no judder on 24p films)
         label: "match frame rate", values: () => [["on", "on (movies & shows)"], ["off", "off"]],
